@@ -1,0 +1,21 @@
+# MHARS — Multi-modal Hybrid Adaptive Response System
+# Install: pip install -r requirements.txt
+
+# Core
+gymnasium>=1.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+torch>=2.0.0
+scikit-learn>=1.3.0
+stable-baselines3[extra]>=2.0.0
+matplotlib>=3.7.0
+
+# Optional: Local LLM support (Phi-3 Mini)
+# Uncomment to enable real LLM alerts:
+# llama-cpp-python>=0.2.0
+
+# Optional: IoT / Stage 4 hardware
+# paho-mqtt>=2.0.0
+
+# Development
+# pytest>=8.0.0
