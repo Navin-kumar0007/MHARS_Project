@@ -15,7 +15,12 @@ matplotlib>=3.7.0
 # llama-cpp-python>=0.2.0
 
 # Optional: IoT / Stage 4 hardware
-# paho-mqtt>=2.0.0
+paho-mqtt>=2.0.0
 
 # Development
 # pytest>=8.0.0
+
+# Web Dashboard
+fastapi>=0.100.0
+uvicorn>=0.23.0
+websockets>=11.0.3

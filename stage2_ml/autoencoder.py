@@ -15,6 +15,7 @@ Architecture:
   Threshold: 95th percentile of normal reconstruction errors
 """
 
+import json
 import numpy as np
 import os, sys
 
@@ -175,7 +176,6 @@ def run_training(model_path=os.path.join(os.path.dirname(os.path.abspath(__file_
         print("  ⚠  Scores not separating well — train for more epochs")
 
     # Save threshold alongside model
-    import json
     meta_path = model_path.replace(".pt", "_meta.json")
     with open(meta_path, "w") as f:
         json.dump({"threshold": threshold, "seq_len": 12}, f)

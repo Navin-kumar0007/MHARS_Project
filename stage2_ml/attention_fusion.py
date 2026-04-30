@@ -19,7 +19,7 @@ Inputs:
   ae_score     — Autoencoder reconstruction error score [0,1]
   if_score     — Isolation Forest anomaly score [0,1]
   cnn_score    — MobileNetV2 hotspot score [0,1] (placeholder=0.5)
-  audio_score  — MFCC anomaly score [0,1] (placeholder=0.5)
+  audio_score  — MFCC anomaly score [0,1]
 
 Output:
   global_context_score — single float [0,1]
@@ -47,7 +47,7 @@ def fuse(
     ae_score:    float,
     if_score:    float,
     cnn_score:   float = 0.5,    # placeholder until Stage 4 camera
-    audio_score: float = 0.5,    # placeholder until Stage 4 microphone
+    audio_score: float = 0.5,    # actual MFCC score or 0.5 default
     lstm_var:    float | None = None,
     ae_var:      float | None = None,
     if_var:      float | None = None,

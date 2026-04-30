@@ -37,7 +37,7 @@ MACHINE_PROFILES = {
     0: {"name": "CPU",    "safe_max": 85.0, "critical": 100.0, "idle": 45.0, "load": 80.0, "heat_rate": 2.5},
     1: {"name": "Motor",  "safe_max": 80.0, "critical":  95.0, "idle": 40.0, "load": 70.0, "heat_rate": 1.8},
     2: {"name": "Server", "safe_max": 75.0, "critical":  90.0, "idle": 35.0, "load": 65.0, "heat_rate": 1.5},
-    3: {"name": "Engine", "safe_max": 100.0,"critical": 115.0, "idle": 60.0, "load": 95.0, "heat_rate": 3.2},
+    3: {"name": "Engine", "safe_max": 95.0, "critical": 110.0, "idle": 70.0, "load": 100.0, "heat_rate": 3.8},
 }
 
 
