@@ -45,7 +45,7 @@ MACHINE_PROFILES_FEATURES = {
     0: np.array([0.85, 0.20, 2.5, 85.0, 100.0], dtype=np.float32),  # CPU
     1: np.array([0.70, 0.30, 1.8, 80.0, 95.0],  dtype=np.float32),  # Motor
     2: np.array([0.65, 0.15, 1.5, 75.0, 90.0],  dtype=np.float32),  # Server
-    3: np.array([0.95, 0.50, 3.2, 100.0, 115.0], dtype=np.float32), # Engine
+    3: np.array([0.95, 0.50, 3.8, 95.0, 110.0], dtype=np.float32), # Engine
 }
 # Feature dimensions:
 # [load_sensitivity, ambient_sensitivity, heat_rate, safe_max, critical_temp]
@@ -192,53 +192,80 @@ def transfer_ppo_policy(base_model_path: str,
                          n_adapt_episodes: int = 50,
                          save_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "ppo_adapted.zip")):
     """
-    Fine-tune a trained PPO policy on a new machine type.
-    Measures how many episodes are needed to reach a reward threshold
-    versus training from scratch.
+    Demonstrate PPO transfer learning with a 3-part experiment:
 
-    Returns (adapted_rewards_curve, scratch_rewards_curve).
+    Part A — Cross-domain generalization:
+        Evaluate the CPU-trained policy on ALL machine types (zero-shot).
+        Shows the model's learned thermal management knowledge transfers.
+
+    Part B — Fine-tuning vs Scratch:
+        Fine-tune the CPU policy on Engine with 25K steps.
+        Train a scratch model on Engine with 25K steps.
+        Compare to show pre-training provides faster convergence.
+
+    Returns (adapted_rewards, scratch_rewards).
     """
     from stable_baselines3 import PPO
     from stable_baselines3.common.monitor import Monitor
-    from stage1_simulation.gym_env import ThermalEnv
+    from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
 
-    print(f"\n  Loading base PPO policy from {base_model_path}")
-    # Must pass env at load time when n_envs differs (trained with 4, adapting with 1)
-    new_env = Monitor(ThermalEnv(machine_type_id=new_machine_id, max_steps=500))
-    adapted_model = PPO.load(base_model_path.replace(".zip", ""), env=new_env)
+    FINETUNE_BUDGET = 25_000
 
-    print(f"  Fine-tuning on machine {new_machine_id} for "
-          f"{n_adapt_episodes * 500:,} timesteps...")
-    adapted_model.learn(total_timesteps=n_adapt_episodes * 500,
-                        reset_num_timesteps=False)
+    # ── Part A: Cross-domain zero-shot evaluation ─────────────────────────────
+    print(f"\n  [Part A] Cross-domain zero-shot transfer (CPU-trained policy):")
+    base_env = Monitor(ThermalEnv(machine_type_id=0, max_steps=500))
+    base_model = PPO.load(base_model_path.replace(".zip", ""), env=base_env)
 
-    # Evaluate adapted model
-    adapted_rewards = _evaluate_policy(adapted_model, new_machine_id, n_eps=10)
+    cross_domain_results = {}
+    for mid in sorted(MACHINE_PROFILES.keys()):
+        rewards = _evaluate_policy(base_model, mid, n_eps=15, seed_offset=300)
+        name = MACHINE_PROFILES[mid]["name"]
+        cross_domain_results[name] = np.mean(rewards)
+        marker = " (source)" if mid == 0 else " (target)" if mid == new_machine_id else ""
+        print(f"    {name:10s} avg reward: {np.mean(rewards):7.1f}{marker}")
 
-    # Compare: train from scratch on new machine
-    print(f"  Training from scratch on machine {new_machine_id}...")
+    # ── Part B: Fine-tuned transfer vs Scratch on Engine ──────────────────────
+    print(f"\n  [Part B] Fine-tuning comparison on Engine ({FINETUNE_BUDGET:,} steps each):")
+
+    # Fine-tuned: start from CPU policy
+    print(f"    Training adapted model (pre-trained → Engine)...")
+    adapted_env = Monitor(ThermalEnv(machine_type_id=new_machine_id, max_steps=500))
+    adapted_model = PPO.load(base_model_path.replace(".zip", ""), env=adapted_env)
+    adapted_model.learn(total_timesteps=FINETUNE_BUDGET, reset_num_timesteps=False)
+    adapted_rewards = _evaluate_policy(adapted_model, new_machine_id, n_eps=15, seed_offset=300)
+    print(f"    Adapted avg reward:  {np.mean(adapted_rewards):.1f}")
+
+    # Scratch: start from random weights
+    print(f"    Training scratch model (random init → Engine)...")
     scratch_model = PPO(
         policy="MlpPolicy",
         env=Monitor(ThermalEnv(machine_type_id=new_machine_id, max_steps=500)),
-        clip_range=0.2, verbose=0
+        learning_rate=3e-4,
+        clip_range=0.2,
+        verbose=0
     )
-    scratch_model.learn(total_timesteps=n_adapt_episodes * 500)
-    scratch_rewards = _evaluate_policy(scratch_model, new_machine_id, n_eps=10)
+    scratch_model.learn(total_timesteps=FINETUNE_BUDGET)
+    scratch_rewards = _evaluate_policy(scratch_model, new_machine_id, n_eps=15, seed_offset=300)
+    print(f"    Scratch avg reward:  {np.mean(scratch_rewards):.1f}")
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     adapted_model.save(save_path.replace(".zip", ""))
-    print(f"  Adapted PPO saved → {save_path}")
+    print(f"\n  Adapted PPO saved → {save_path}")
 
     return adapted_rewards, scratch_rewards
 
 
-def _evaluate_policy(model, machine_id: int, n_eps: int = 10) -> list:
-    """Evaluate a policy for n episodes, return list of episode rewards."""
+def _evaluate_policy(model, machine_id: int, n_eps: int = 10, seed_offset: int = 0) -> list:
+    """Evaluate a policy for n episodes, return list of episode rewards.
+    
+    seed_offset ensures evaluation episodes use different random seeds 
+    than training episodes, preventing artificially inflated results.
+    """
     from stage1_simulation.gym_env import ThermalEnv
     rewards = []
     for ep in range(n_eps):
         env  = ThermalEnv(machine_type_id=machine_id, max_steps=500)
-        obs, _ = env.reset(seed=ep)
+        obs, _ = env.reset(seed=seed_offset + ep)
         ep_r = 0
         done = False
         while not done:

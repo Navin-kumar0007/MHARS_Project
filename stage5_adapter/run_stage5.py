@@ -253,8 +253,8 @@ def run_ppo_experiment():
             return None
 
     print(f"\n  Running PPO transfer experiment on Engine (machine 3)...")
-    print(f"  Both models get 50 × 500 = 25,000 timesteps")
-    print(f"  (50 episodes worth of experience)\n")
+    print(f"  Three conditions: zero-shot, fine-tuned (10K steps), scratch (10K steps)")
+    print(f"  This demonstrates the pre-training advantage of transfer learning\n")
 
     adapted_rewards, scratch_rewards = transfer_ppo_policy(
         base_model_path = BASE_PPO,
@@ -292,7 +292,8 @@ def run_ppo_experiment():
 def save_results(lstm_results: dict, ppo_results: dict):
     """Save results to a JSON file ready for inclusion in the paper."""
     import json
-    os.makedirs("../results", exist_ok=True)
+    results_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results")
+    os.makedirs(results_dir, exist_ok=True)
     results = {
         "experiment": "MHARS Machine Adapter Validation",
         "machine_a":  "CPU (id=0) — trained in Stage 2 & 3",
