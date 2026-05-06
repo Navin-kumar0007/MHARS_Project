@@ -1,20 +1,62 @@
-# Virtual Environments
+# ── Virtual environment ───────────────────────────────────────
 venv/
 env/
 .env
-
-# Python Cache
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
 
-# Models and Large Files
+# ── Model weight files (DO NOT commit — see models/README.md) ─
+# These are binary files that can be hundreds of MB.
+# Regenerate them by running the stage scripts.
 models/*.pt
 models/*.pkl
 models/*.zip
 models/*.gguf
+models/*.bin
+models/*.safetensors
 
-# IDEs
-.vscode/
-.idea/
+# ── Data files (download separately — see README.md) ─────────
+data/*.txt
+data/*.csv
+data/*.zip
+data/*.gz
+
+# ── Results and outputs ───────────────────────────────────────
+# Keep results/ folder structure but ignore large output files
+results/*.png
+results/*.jpg
+results/*.pdf
+
+# ── IDE and OS files ──────────────────────────────────────────
 .DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+
+# ── Jupyter notebooks checkpoints ────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Build artifacts ───────────────────────────────────────────
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ── pytest cache ─────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+tensorboard_logs/
+
+# ── llama.cpp build artifacts ─────────────────────────────────
+*.so
+*.dylib
