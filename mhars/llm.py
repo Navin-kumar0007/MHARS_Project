@@ -5,7 +5,7 @@ Wraps Phi-3 Mini (4-bit GGUF) with a template fallback.
 Import: from mhars.llm import AlertGenerator
 """
 
-import os, time
+import os, time, threading, queue
 
 # Phi-3 chat format — required for clean output without role tags
 PROMPT_TEMPLATE = """<|user|>
@@ -45,6 +45,32 @@ class AlertGenerator:
             print("        pip install llama-cpp-python")
             print("        Download Phi-3-mini-4k-instruct-q4.gguf from")
             print("        huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf")
+
+        self._queue = queue.Queue()
+        self._worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self._worker_thread.start()
+
+    def _worker(self):
+        while True:
+            item = self._queue.get()
+            if item is None: break
+            ctx, callback = item
+            try:
+                res = self.generate(ctx)
+                if callback:
+                    callback(res)
+            except Exception as e:
+                print(f"[LLM Async Error] {e}")
+            finally:
+                self._queue.task_done()
+
+    def generate_async(self, context: dict, callback=None):
+        """Queue the alert generation for background processing."""
+        self._queue.put((context, callback))
+
+    def wait_for_alerts(self):
+        """Block until all async alerts have been generated and processed."""
+        self._queue.join()
 
     def _load_llm(self, model_path: str):
         try:

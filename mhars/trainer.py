@@ -32,6 +32,8 @@ class MHARSTrainer:
         self.train_isolation_forest()
         self.train_lstm()
         self.train_autoencoder()
+        self.train_vibration_detector()
+        self.train_cnn()
         self.train_ppo(machine=ppo_machine, timesteps=ppo_timesteps)
         print("\n[MHARS Trainer] All models trained ✓")
 
@@ -40,6 +42,8 @@ class MHARSTrainer:
         self.train_isolation_forest()
         self.train_lstm()
         self.train_autoencoder()
+        self.train_vibration_detector()
+        self.train_cnn()
 
     def train_isolation_forest(self):
         print("[Trainer] Training Isolation Forest...")
@@ -55,6 +59,16 @@ class MHARSTrainer:
         print("[Trainer] Training Autoencoder...")
         from stage2_ml.autoencoder import run_training
         run_training(model_path=Config.AUTOENCODER)
+
+    def train_vibration_detector(self):
+        print("[Trainer] Training Vibration Detector...")
+        from stage2_ml.vibration_model import run_training
+        run_training(model_path=Config.VIBRATION_DETECTOR)
+
+    def train_cnn(self):
+        print("[Trainer] Training CNN Hotspot Detector...")
+        from stage2_ml.mobilenet_cnn import run_training
+        run_training(model_path=Config.CNN_MODEL)
 
     def train_ppo(self, machine: int = 0, timesteps: int = None):
         print(f"[Trainer] Training PPO for machine {machine}...")

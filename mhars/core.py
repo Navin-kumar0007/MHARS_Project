@@ -190,6 +190,25 @@ class MHARS:
         except Exception as e:
             print(f"  ⚠  LLM init failed: {e}")
 
+        # Multi-modal CNN Hotspot Detector
+        self._cnn = None
+        try:
+            from stage2_ml.mobilenet_cnn import ThermalHotspotDetector
+            cnn_path = os.path.join("models", "mobilenet_cnn.pt")
+            self._cnn = ThermalHotspotDetector(cnn_path if os.path.exists(cnn_path) else None)
+            print("  ✓  CNN Hotspot Detector loaded")
+        except Exception as e:
+            print(f"  ⚠  CNN Hotspot Detector not found: {e}")
+
+        # Multi-modal Audio MFCC Pipeline
+        self._audio = None
+        try:
+            from stage2_ml.audio_mfcc import AudioPipeline
+            self._audio = AudioPipeline()
+            print("  ✓  Audio MFCC Pipeline loaded")
+        except Exception as e:
+            print(f"  ⚠  Audio MFCC Pipeline not found: {e}")
+
     # ── Main pipeline ──────────────────────────────────────────────────────────
     def run(self, temp_celsius: float, extra_scores: Optional[Dict] = None) -> MHARSResult:
         """
@@ -221,18 +240,34 @@ class MHARS:
         # Step 4 — Autoencoder anomaly score
         ae_score = self._compute_ae_score()
 
-        # Step 4b — Vibration anomaly score (2nd modality)
+        # Step 4b — Vibration anomaly score
         vib_score = self._compute_vib_score(temp_norm)
+
+        # Step 4c — Multi-modal inputs (CNN and Audio)
+        cnn_score   = extra.get("cnn_score", 0.5)
+        cnn_var     = extra.get("cnn_var", None)
+        audio_score = extra.get("audio_score", 0.5)
+        audio_var   = extra.get("audio_var", None)
+
+        if self._cnn is not None and "cnn_score" not in extra:
+            cnn_res = self._cnn.predict_from_temperature(temp_celsius, self.profile["safe_max"])
+            cnn_score = cnn_res["hotspot_score"]
+            cnn_var   = cnn_res["grid_variance"]
+            
+        if self._audio is not None and "audio_score" not in extra:
+            aud_res = self._audio.process_from_temperature(temp_celsius, self.profile["safe_max"])
+            audio_score = aud_res["audio_score"]
+            audio_var   = aud_res["audio_variance"]
 
         # Step 5 — Attention fusion → context score + urgency
         context, urgency = self._fuse(
             lstm_score = lstm_score,
             ae_score   = ae_score,
             if_score   = if_score,
-            cnn_score  = vib_score,                       # vibration replaces CNN placeholder
-            audio_score= extra.get("audio_score",  0.5),  # audio still placeholder
-            cnn_var    = None,                             # vibration variance not tracked yet
-            audio_var  = extra.get("audio_var",    None),
+            cnn_score  = max(cnn_score, vib_score),  # Fuse max physical stress
+            audio_score= audio_score,
+            cnn_var    = cnn_var,
+            audio_var  = audio_var,
         )
 
         # Step 6 — RL Router decision
@@ -240,24 +275,14 @@ class MHARS:
 
         # Step 7 — PPO action
         obs    = self._build_obs(temp_norm, lstm_pred_norm, ae_score, urgency)
-        action = self._decide(obs)
-
-        # Step 8 — LLM alert
-        alert_ctx = {
-            "machine_type":   self.machine_name,
-            "current_temp":   temp_celsius,
-            "predicted_temp": lstm_pred_celsius,
-            "anomaly_score":  ae_score,
-            "action_name":    action,
-            "urgency":        urgency,
-        }
-        alert, llm_source = self._generate_alert(alert_ctx, route)
+        action = self._decide(obs, temp_celsius)
 
         latency_ms = (time.perf_counter() - t0) * 1000
         self._steps_since_action = (
             0 if action != "do-nothing" else self._steps_since_action + 1
         )
 
+        # Create Result object first
         result = MHARSResult(
             timestamp       = time.time(),
             machine_type    = self.machine_name,
@@ -268,16 +293,43 @@ class MHARS:
             urgency         = urgency,
             action          = action,
             route           = route,
-            alert           = alert,
-            llm_source      = llm_source,
+            alert           = "Generating async alert...",
+            llm_source      = "async",
             latency_ms      = round(latency_ms, 2),
             raw_obs         = obs.tolist(),
             metadata        = {
                 "if_score": if_score, "lstm_score": lstm_score,
                 "ae_score": ae_score, "vib_score": vib_score,
+                "cnn_score": cnn_score, "audio_score": audio_score,
                 "context_score": context,
             }
         )
+
+        # Step 8 — LLM alert (Non-blocking / Async)
+        alert_ctx = {
+            "machine_type":   self.machine_name,
+            "current_temp":   temp_celsius,
+            "predicted_temp": lstm_pred_celsius,
+            "anomaly_score":  ae_score,
+            "action_name":    action,
+            "urgency":        urgency,
+        }
+        
+        if route == "edge":
+            result.alert = (f"[EDGE ALERT] {self.machine_name} at {temp_celsius:.1f}°C! "
+                            f"Urgent action triggered: {action}.")
+            result.llm_source = "edge_template"
+        elif self._llm_gen is not None:
+            def on_alert_ready(res_dict):
+                result.alert = res_dict["alert"]
+                result.llm_source = res_dict["source"]
+                if self.verbose:
+                    print(f"\n  [ASYNC ALERT READY] {result.alert}")
+            
+            self._llm_gen.generate_async(alert_ctx, callback=on_alert_ready)
+        else:
+            result.alert = f"[{self.machine_name}] {temp_celsius:.1f}°C — action: {action}."
+            result.llm_source = "fallback"
 
         if self.verbose:
             print(result.summary())
@@ -415,18 +467,25 @@ class MHARS:
             urgency,
         ], dtype=np.float32)
 
-    def _decide(self, obs: np.ndarray) -> str:
+    def _decide(self, obs: np.ndarray, current_temp_raw: float) -> str:
+        # HARDWARE SAFETY OVERRIDE:
+        # RL agents are prone to out-of-distribution failure.
+        # In real-world industrial systems, a strict rule-based
+        # safety envelope always overrides the AI.
+        p = self.profile
+        if current_temp_raw >= p["critical"]:
+            return "emergency-shutdown"
+        elif current_temp_raw >= p["safe_max"] and obs[5] > 0.8:
+            return "shutdown"
+
         if self._ppo is not None:
             action_id, _ = self._ppo.predict(obs, deterministic=True)
             return Config.ACTIONS[int(action_id)]
+        
         # Rule-based fallback when PPO not loaded
         temp_norm = obs[0]
         urgency   = obs[5]
-        p = self.profile
-        ratio = temp_norm * (p["critical"] - 15) + 15
-        if ratio >= p["critical"] * 0.95:
-            return "shutdown"
-        elif urgency > 0.7:
+        if urgency > 0.7:
             return "fan+"
         elif urgency > 0.5:
             return "throttle"
@@ -434,23 +493,7 @@ class MHARS:
             return "alert"
         return "do-nothing"
 
-    def _generate_alert(self, ctx: dict, route: str):
-        # Skip LLM to ensure < 50ms latency if strictly routed to edge
-        if route == "edge":
-            return (
-                f"[EDGE ALERT] {ctx['machine_type']} at {ctx['current_temp']:.1f}°C! "
-                f"Urgent action triggered: {ctx['action_name']}.", "edge_template"
-            )
-
-        if self._llm_gen is not None:
-            result = self._llm_gen.generate(ctx)
-            return result["alert"], result["source"]
-            
-        # Simple fallback if LLM module not available at all
-        return (
-            f"[{self.machine_name}] {ctx['current_temp']:.1f}°C — "
-            f"action: {ctx['action_name']}.", "fallback"
-        )
+    # (Alert generation is now inline async in run())
 
     # ── Convenience methods ────────────────────────────────────────────────────
     def run_sequence(self, temps: List[float]) -> List[MHARSResult]:
@@ -462,3 +505,8 @@ class MHARS:
         self._temp_window.clear()
         self._steps_since_action = 0
         print(f"[MHARS] Reset for {self.machine_name}")
+
+    def wait_for_alerts(self):
+        """Block until all background LLM alerts have been processed."""
+        if self._llm_gen is not None:
+            self._llm_gen.wait_for_alerts()
