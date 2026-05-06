@@ -46,8 +46,15 @@ if os.path.exists(llm_path):
     for temp, label in scenarios:
         r = system_llm.run(temp)
         print(f"\n  [{label}] {temp}°C → {r.action}")
-        print(f"  {r.alert}")
-        print(f"  Source: {r.llm_source}  |  {r.latency_ms:.0f} ms")
+        print(f"  Initial Alert Status: {r.alert}")
+        print(f"  Source: {r.llm_source}  |  Pipeline Latency: {r.latency_ms:.0f} ms")
+        
+        # Wait up to 5 seconds for the async alert to finish generating
+        import time
+        for _ in range(50):
+            if r.llm_source != "async":
+                break
+            time.sleep(0.1)
 else:
     print(f"  Phi-3 Mini not found at {llm_path}")
     print("  Run with template fallback:")

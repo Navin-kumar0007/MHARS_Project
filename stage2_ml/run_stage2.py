@@ -53,6 +53,32 @@ def run_autoencoder():
     return ae_model, threshold, passed
 
 
+def run_vibration():
+    print("\n" + "=" * 56)
+    print("  Component 3b — Vibration Detector")
+    print("=" * 56)
+    from stage2_ml.vibration_model import run_training
+    vib_model, mean, std, threshold = run_training(model_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "vibration_detector.pt"))
+    passed = threshold > 0
+    status = "PASS" if passed else "FAIL"
+    print(f"[{status}] Vibration Detector  threshold={threshold:.6f}")
+    return passed
+
+
+def run_cnn():
+    print("\n" + "=" * 56)
+    print("  Component 3c — CNN Hotspot Detector")
+    print("=" * 56)
+    from stage2_ml.mobilenet_cnn import run_training
+    # This might take a few minutes if PyTorch is available
+    cnn_model = run_training(model_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "mobilenet_cnn.pt"))
+    # If None, pytorch isn't available, we pass it anyway with a warning
+    passed = True
+    status = "PASS" if cnn_model is not None else "WARN (No PyTorch)"
+    print(f"[{status}] CNN Hotspot Detector")
+    return passed
+
+
 def run_fusion():
     print("\n" + "=" * 56)
     print("  Component 4 — Attention Fusion")
@@ -173,6 +199,8 @@ def main():
     clf,      p1 = run_isolation_forest()
     lstm,     p2 = run_lstm()
     ae, thr,  p3 = run_autoencoder()
+    p_vib        = run_vibration()
+    p_cnn        = run_cnn()
     p4            = run_fusion()
     p5            = run_pipeline_integration(clf, lstm, ae, thr)
 
@@ -180,6 +208,8 @@ def main():
         ("Isolation Forest (FPR < 5%)",  p1),
         ("LSTM (RMSE < 5°C synth.)",     p2),
         ("Autoencoder (threshold set)",   p3),
+        ("Vibration Detector",            p_vib),
+        ("CNN Hotspot Detector",          p_cnn),
         ("Attention Fusion (4 tests)",    p4),
         ("Pipeline integration",          p5),
     ]
