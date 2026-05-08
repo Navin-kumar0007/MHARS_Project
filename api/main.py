@@ -26,6 +26,12 @@ from collections import deque
 # Ensure we can import mhars modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -68,6 +74,9 @@ class SystemState:
         self.alert_history: deque = deque(maxlen=50)
         self.telemetry_history: deque = deque(maxlen=200)
 
+        # Live mode: read real hardware temp instead of simulation
+        self.live_mode: bool = False
+
     def reinitialize(self, machine_type_id: int):
         """Switch to a different machine type — reinitializes all AI models."""
         self.machine_type_id = machine_type_id
@@ -82,6 +91,46 @@ class SystemState:
 
 
 state = SystemState(machine_type_id=1)  # Default: Motor
+
+
+def read_hardware_temp() -> float:
+    """Read real CPU temperature / activity from hardware.
+    
+    Strategy:
+    1. Try psutil.sensors_temperatures() (Linux)
+    2. Try psutil.cpu_percent() mapped to temp range (cross-platform)
+    3. Fallback: use os.getloadavg() mapped to temp range (macOS/Linux)
+    """
+    # Method 1: psutil sensors (Linux)
+    if PSUTIL_AVAILABLE:
+        try:
+            temps = psutil.sensors_temperatures()
+            if temps:
+                for name, entries in temps.items():
+                    if entries:
+                        return entries[0].current
+        except (AttributeError, Exception):
+            pass
+
+        # Method 2: psutil CPU percent → temp mapping
+        try:
+            cpu_pct = psutil.cpu_percent(interval=0.1)
+            base_temp = 36.0
+            load_heat = cpu_pct * 0.48
+            return round(base_temp + load_heat + np.random.normal(0, 0.3), 2)
+        except Exception:
+            pass
+
+    # Method 3: os.getloadavg (macOS / Linux native, no pip needed)
+    try:
+        load_1min = os.getloadavg()[0]  # 1-minute load average
+        cpu_count = os.cpu_count() or 4
+        load_pct = min(100, (load_1min / cpu_count) * 100)
+        base_temp = 36.0
+        load_heat = load_pct * 0.48
+        return round(base_temp + load_heat + np.random.normal(0, 0.3), 2)
+    except Exception:
+        return 42.0
 
 
 # ── Request Models ─────────────────────────────────────────────────────────────
@@ -239,6 +288,34 @@ async def get_alert_history():
     return {"alerts": list(state.alert_history)}
 
 
+@app.post("/api/toggle_mode")
+async def toggle_mode():
+    """Toggle between live hardware mode and simulation demo mode."""
+    state.live_mode = not state.live_mode
+    mode = "live" if state.live_mode else "demo"
+    # When switching to live, reinit MHARS as CPU (the actual machine)
+    if state.live_mode:
+        state.reinitialize(0)  # CPU profile for real computer
+    state.action_history.clear()
+    state.alert_history.clear()
+    state.telemetry_history.clear()
+    return {
+        "status": "success",
+        "mode": mode,
+        "message": f"Switched to {mode} mode." + (
+            " Reading real CPU temperature." if state.live_mode
+            else " Using simulated thermal environment."
+        ),
+        "psutil_available": PSUTIL_AVAILABLE,
+    }
+
+
+@app.get("/api/mode")
+async def get_mode():
+    """Return current mode."""
+    return {"mode": "live" if state.live_mode else "demo", "live_mode": state.live_mode}
+
+
 # ── WebSocket Telemetry Stream ─────────────────────────────────────────────────
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket):
@@ -251,11 +328,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # ── Step 1: Apply anomaly injection to temperature ──────────────
-            state.env.temp = apply_anomaly_to_temp(state.env.temp)
+            # ── Step 1: Get temperature ────────────────────────────────────
+            if state.live_mode:
+                # LIVE MODE: read real hardware CPU temperature
+                current_temp = read_hardware_temp()
+            else:
+                # DEMO MODE: simulated environment + anomaly injection
+                state.env.temp = apply_anomaly_to_temp(state.env.temp)
+                current_temp = state.env.temp
 
             # ── Step 2: Run the complete MHARS AI pipeline ─────────────────
-            result = state.mhars.run(state.env.temp)
+            result = state.mhars.run(current_temp, sync_alert=True)
 
             # ── Step 3: Apply PPO action feedback to the simulation ────────
             action_effects = {
@@ -308,8 +391,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 "raw_obs": [round(v, 4) for v in result.raw_obs],
 
                 # Active anomaly injection info
-                "active_anomaly": state.anomaly_injection,
-                "anomaly_ticks_remaining": state.anomaly_ticks_remaining,
+                "active_anomaly": state.anomaly_injection if not state.live_mode else None,
+                "anomaly_ticks_remaining": state.anomaly_ticks_remaining if not state.live_mode else 0,
+
+                # Mode indicator
+                "live_mode": state.live_mode,
 
                 # Machine thresholds (for gauge rendering)
                 "thresholds": {

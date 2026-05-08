@@ -99,7 +99,9 @@ class AlertGenerator:
 
         t0 = time.perf_counter()
 
-        if self.use_llm:
+        force_template = context.pop('_force_template', False)
+
+        if self.use_llm and not force_template:
             alert = self._llm_generate(
                 machine_type, current_temp, predicted_temp,
                 anomaly_score, action_name, urgency
