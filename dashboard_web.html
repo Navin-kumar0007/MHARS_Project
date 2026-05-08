@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MHARS Control Center</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0e1a;--card:#111827;--border:#1e293b;
+  --text:#e2e8f0;--muted:#64748b;--accent:#6366f1;
+  --green:#10b981;--yellow:#f59e0b;--orange:#f97316;--red:#ef4444;--blue:#3b82f6;
+}
+body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+.glow{position:fixed;width:400px;height:400px;border-radius:50%;filter:blur(150px);pointer-events:none;opacity:.08}
+.glow-1{top:-100px;left:-100px;background:#6366f1}
+.glow-2{bottom:-100px;right:-100px;background:#06b6d4}
+
+/* Layout */
+.container{max-width:1400px;margin:0 auto;padding:20px}
+header{display:flex;align-items:center;justify-content:space-between;padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:20px}
+header h1{font-size:22px;font-weight:800;background:linear-gradient(135deg,#6366f1,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+header .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* Machine Tabs */
+.machine-tabs{display:flex;gap:8px;margin-bottom:20px}
+.machine-tab{padding:8px 18px;border-radius:10px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);transition:.2s}
+.machine-tab:hover{border-color:var(--accent);color:var(--text)}
+.machine-tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* Grid */
+.grid{display:grid;gap:16px}
+.grid-4{grid-template-columns:repeat(4,1fr)}
+.grid-2{grid-template-columns:1fr 1fr}
+.grid-3-1{grid-template-columns:2fr 1fr}
+@media(max-width:900px){.grid-4,.grid-2,.grid-3-1{grid-template-columns:1fr}}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px;position:relative;overflow:hidden}
+.card-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px}
+.card-value{font-size:32px;font-weight:900;line-height:1.1}
+.card-sub{font-size:12px;color:var(--muted);margin-top:6px}
+
+/* Health Badge */
+.health-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:20px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.health-healthy{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.health-monitoring{background:rgba(245,158,11,.15);color:var(--yellow);border:1px solid rgba(245,158,11,.3)}
+.health-warning{background:rgba(249,115,22,.15);color:var(--orange);border:1px solid rgba(249,115,22,.3)}
+.health-critical{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);animation:pulse 1s infinite}
+
+/* Temperature Display */
+.temp-display{text-align:center}
+.temp-number{font-size:56px;font-weight:900;line-height:1}
+.temp-unit{font-size:20px;font-weight:600;opacity:.6}
+.temp-bar{height:6px;border-radius:3px;margin-top:12px;background:#1e293b;overflow:hidden;position:relative}
+.temp-fill{height:100%;border-radius:3px;transition:width .5s,background .5s}
+
+/* Action Card */
+.action-icon{font-size:28px;margin-bottom:6px}
+.action-text{font-size:15px;font-weight:600;line-height:1.4}
+
+/* Progress bars */
+.sensor-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.sensor-name{font-size:11px;color:var(--muted);width:100px;text-align:right}
+.sensor-bar{flex:1;height:6px;background:#1e293b;border-radius:3px;overflow:hidden}
+.sensor-fill{height:100%;border-radius:3px;transition:width .5s}
+.sensor-val{font-size:11px;color:var(--muted);width:40px}
+
+/* Alert Log */
+.alert-log{max-height:260px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#1e293b transparent}
+.alert-item{padding:10px 12px;border-radius:8px;margin-bottom:6px;font-size:12px;line-height:1.5;border-left:3px solid}
+.alert-normal{background:rgba(16,185,129,.05);border-color:var(--green)}
+.alert-warning{background:rgba(245,158,11,.05);border-color:var(--yellow)}
+.alert-critical{background:rgba(239,68,68,.05);border-color:var(--red)}
+.alert-time{font-size:10px;color:var(--muted)}
+
+/* Inject Buttons */
+.inject-btn{width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:12px;font-weight:600;cursor:pointer;transition:.2s;text-align:left;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.inject-btn:hover{border-color:var(--accent);background:rgba(99,102,241,.1)}
+
+/* Chart container */
+.chart-wrap{height:220px;position:relative}
+
+/* Connection banner */
+.conn-banner{text-align:center;padding:8px;font-size:12px;font-weight:600;border-radius:8px;margin-bottom:16px}
+.conn-ok{background:rgba(16,185,129,.1);color:var(--green)}
+.conn-err{background:rgba(239,68,68,.1);color:var(--red)}
+
+/* Toggle Switch */
+.toggle-wrap{display:flex;align-items:center;gap:10px}
+.toggle-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.toggle-label.active{color:var(--green)}
+.toggle{position:relative;width:48px;height:26px;cursor:pointer}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-track{position:absolute;inset:0;background:#1e293b;border-radius:13px;border:1px solid var(--border);transition:.3s}
+.toggle-track:before{content:'';position:absolute;width:20px;height:20px;left:3px;top:2px;background:var(--muted);border-radius:50%;transition:.3s}
+.toggle input:checked+.toggle-track{background:rgba(16,185,129,.2);border-color:var(--green)}
+.toggle input:checked+.toggle-track:before{transform:translateX(21px);background:var(--green);box-shadow:0 0 8px rgba(16,185,129,.5)}
+.mode-badge{font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.mode-demo{background:rgba(99,102,241,.15);color:var(--accent);border:1px solid rgba(99,102,241,.3)}
+.mode-live{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3);animation:pulse 1.5s infinite}
+</style>
+</head>
+<body>
+<div class="glow glow-1"></div>
+<div class="glow glow-2"></div>
+<div class="container">
+
+<div id="connBanner" class="conn-banner conn-err">⏳ Connecting to MHARS backend at ws://localhost:8000...</div>
+
+<header>
+  <div>
+    <h1>MHARS Control Center</h1>
+    <p style="font-size:11px;color:var(--muted);margin-top:2px">Multi-modal Hybrid Adaptive Response System</p>
+  </div>
+  <div style="display:flex;align-items:center;gap:16px">
+    <div class="toggle-wrap">
+      <span class="toggle-label" id="lblDemo">Demo</span>
+      <label class="toggle">
+        <input type="checkbox" id="modeToggle" onchange="toggleMode()">
+        <span class="toggle-track"></span>
+      </label>
+      <span class="toggle-label" id="lblLive">Live</span>
+    </div>
+    <span class="mode-badge mode-demo" id="modeBadge">SIMULATION</span>
+    <div id="headerBadge"></div>
+  </div>
+</header>
+
+<!-- Machine Tabs -->
+<div class="machine-tabs" id="machineTabs">
+  <div class="machine-tab active" data-id="0">🖥️ CPU</div>
+  <div class="machine-tab" data-id="1">⚙️ Motor</div>
+  <div class="machine-tab" data-id="2">🖧 Server</div>
+  <div class="machine-tab" data-id="3">🔧 Engine</div>
+</div>
+
+<!-- Row 1: Health / Temp / Action / Route -->
+<div class="grid grid-4" style="margin-bottom:16px">
+  <div class="card" id="healthCard">
+    <div class="card-label">Machine Health</div>
+    <div id="healthBadge" class="health-badge health-healthy">● Healthy</div>
+    <div class="card-sub" id="healthDesc">All systems operating normally</div>
+  </div>
+  <div class="card temp-display">
+    <div class="card-label">Temperature</div>
+    <div><span id="tempNum" class="temp-number" style="color:var(--green)">--</span><span class="temp-unit">°C</span></div>
+    <div class="temp-bar"><div id="tempFill" class="temp-fill" style="width:0;background:var(--green)"></div></div>
+    <div class="card-sub" id="tempContext">Waiting for data...</div>
+  </div>
+  <div class="card" id="actionCard">
+    <div class="card-label">AI Decision</div>
+    <div id="actionIcon" class="action-icon">⏸️</div>
+    <div id="actionText" class="action-text">Standby</div>
+    <div class="card-sub" id="actionSub">Waiting for telemetry</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Processing Route</div>
+    <div id="routeIcon" class="action-icon">📡</div>
+    <div id="routeText" class="action-text" style="font-size:14px">—</div>
+    <div class="card-sub" id="routeSub">—</div>
+  </div>
+</div>
+
+<!-- Row 2: Chart + Sensor Health -->
+<div class="grid grid-3-1" style="margin-bottom:16px">
+  <div class="card">
+    <div class="card-label">Temperature History</div>
+    <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-label">Sensor Health Overview</div>
+    <div id="sensorBars">
+      <div class="sensor-row"><span class="sensor-name">Trend Forecast</span><div class="sensor-bar"><div class="sensor-fill" id="barLSTM" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valLSTM">—</span></div>
+      <div class="sensor-row"><span class="sensor-name">Pattern Check</span><div class="sensor-bar"><div class="sensor-fill" id="barAE" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valAE">—</span></div>
+      <div class="sensor-row"><span class="sensor-name">Outlier Scan</span><div class="sensor-bar"><div class="sensor-fill" id="barIF" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valIF">—</span></div>
+      <div class="sensor-row"><span class="sensor-name">Vibration</span><div class="sensor-bar"><div class="sensor-fill" id="barVib" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valVib">—</span></div>
+      <div class="sensor-row"><span class="sensor-name">Combined</span><div class="sensor-bar"><div class="sensor-fill" id="barCtx" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valCtx">—</span></div>
+    </div>
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
+      <div class="card-label">Response Time</div>
+      <div style="font-size:24px;font-weight:800" id="latencyVal">— ms</div>
+      <div class="card-sub" id="latencyDesc">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- Row 3: Alerts + Inject -->
+<div class="grid grid-3-1">
+  <div class="card">
+    <div class="card-label">AI Recommendations & Alerts</div>
+    <div class="alert-log" id="alertLog">
+      <div class="alert-item alert-normal"><span class="alert-time">—</span><br>Waiting for system data...</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-label">🧪 Test Scenarios</div>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:10px">Simulate faults to see how the AI responds</p>
+    <button class="inject-btn" onclick="inject('temperature_spike')">🔥 Sudden Heat Spike</button>
+    <button class="inject-btn" onclick="inject('bearing_wear')">⚙️ Bearing Wear</button>
+    <button class="inject-btn" onclick="inject('fan_blockage')">🌀 Cooling Fan Blocked</button>
+    <button class="inject-btn" onclick="inject('sensor_drift')">📉 Sensor Malfunction</button>
+    <button class="inject-btn" onclick="inject('power_surge')">⚡ Power Surge</button>
+    <button class="inject-btn" style="border-color:var(--blue);color:var(--blue);margin-top:8px" onclick="resetSys()">🔄 Reset System</button>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<script>
+// ── Config ──────────────────────────────────────────────────
+const API = 'http://localhost:8000';
+const WS_URL = 'ws://localhost:8000/ws/telemetry';
+const MAX_POINTS = 40;
+
+// ── Human-readable translations ─────────────────────────────
+const ACTION_MAP = {
+  'do-nothing':         { icon:'✅', text:'System Normal',               sub:'No intervention needed — all parameters within safe range' },
+  'fan+':               { icon:'🌀', text:'Cooling Increased',           sub:'Fan speed raised by 20% to manage rising temperature' },
+  'increase-fan':       { icon:'🌀', text:'Cooling Increased',           sub:'Fan speed raised by 20% to manage rising temperature' },
+  'throttle':           { icon:'⚡', text:'Workload Reduced',            sub:'Load decreased by 15% to prevent thermal damage' },
+  'alert':              { icon:'⚠️', text:'Maintenance Alert Sent',      sub:'Maintenance team has been automatically notified' },
+  'shutdown':           { icon:'🛑', text:'Emergency Shutdown',          sub:'Critical temperature — machine powered down for safety' },
+  'emergency-shutdown': { icon:'🛑', text:'Emergency Shutdown',          sub:'Critical temperature — machine powered down for safety' },
+};
+const ROUTE_MAP = {
+  'edge':  { icon:'⚡', text:'Local Processing',    sub:'Ultra-fast response — processed on-device in real time' },
+  'cloud': { icon:'☁️',  text:'Cloud Analysis',      sub:'Deep analysis — sent to cloud for comprehensive evaluation' },
+  'both':  { icon:'🔄', text:'Hybrid Processing',   sub:'Balanced — local fast-response + cloud deep-analysis' },
+};
+
+function healthLevel(urgency) {
+  if (urgency >= 0.8) return { cls:'health-critical',  label:'● Critical',   desc:'Immediate attention required — system at risk' };
+  if (urgency >= 0.6) return { cls:'health-warning',   label:'● Warning',    desc:'Elevated risk detected — AI is actively managing' };
+  if (urgency >= 0.3) return { cls:'health-monitoring', label:'● Monitoring', desc:'Minor anomaly detected — system is being watched' };
+  return                      { cls:'health-healthy',   label:'● Healthy',    desc:'All systems operating normally' };
+}
+
+function tempContext(temp, thresholds) {
+  if (!thresholds) return '';
+  if (temp >= thresholds.critical) return `⛔ ABOVE CRITICAL (${thresholds.critical}°C)`;
+  if (temp >= thresholds.safe_max) return `⚠️ Above safe limit (${thresholds.safe_max}°C)`;
+  if (temp >= thresholds.idle + (thresholds.safe_max - thresholds.idle) * 0.7) return `📈 Running warm — approaching safe limit`;
+  return `✓ Within normal operating range`;
+}
+
+function barColor(val) {
+  if (val >= 0.7) return 'var(--red)';
+  if (val >= 0.4) return 'var(--yellow)';
+  return 'var(--green)';
+}
+
+function fmtTime(ts) {
+  return new Date(ts * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false });
+}
+
+// ── Chart Setup ─────────────────────────────────────────────
+const ctx = document.getElementById('tempChart').getContext('2d');
+const tempChart = new Chart(ctx, {
+  type:'line',
+  data:{
+    labels:[],
+    datasets:[
+      { label:'Actual Temperature', data:[], borderColor:'#f43f5e', borderWidth:2, pointRadius:0, tension:.3, fill:false },
+      { label:'AI Prediction (+10min)', data:[], borderColor:'#06b6d4', borderWidth:2, borderDash:[6,3], pointRadius:0, tension:.3, fill:false },
+    ]
+  },
+  options:{
+    responsive:true, maintainAspectRatio:false, animation:{ duration:300 },
+    plugins:{ legend:{ labels:{ color:'#94a3b8', font:{size:11} } } },
+    scales:{
+      x:{ ticks:{ color:'#475569', font:{size:10}, maxTicksLimit:8 }, grid:{ color:'#1e293b33' } },
+      y:{ ticks:{ color:'#475569', font:{size:10} }, grid:{ color:'#1e293b66' } },
+    }
+  }
+});
+
+// ── State ───────────────────────────────────────────────────
+let alerts = [];
+let thresholds = {};
+
+// ── WebSocket ───────────────────────────────────────────────
+let ws;
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    document.getElementById('connBanner').className = 'conn-banner conn-ok';
+    document.getElementById('connBanner').textContent = '🟢 Connected to MHARS backend — live data streaming';
+  };
+  ws.onclose = () => {
+    document.getElementById('connBanner').className = 'conn-banner conn-err';
+    document.getElementById('connBanner').textContent = '🔴 Disconnected — reconnecting in 3s...';
+    setTimeout(connect, 3000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (e) => {
+    try { update(JSON.parse(e.data)); } catch(err) { console.error(err); }
+  };
+}
+connect();
+
+// ── Update UI ───────────────────────────────────────────────
+function update(d) {
+  thresholds = d.thresholds || {};
+  const urg = d.urgency || 0;
+
+  // Health badge
+  const h = healthLevel(urg);
+  const badge = document.getElementById('healthBadge');
+  badge.className = 'health-badge ' + h.cls;
+  badge.textContent = h.label;
+  document.getElementById('healthDesc').textContent = h.desc;
+  document.getElementById('headerBadge').innerHTML = `<span class="health-badge ${h.cls}">${h.label}</span>`;
+
+  // Temperature
+  const temp = d.current_temp || 0;
+  const el = document.getElementById('tempNum');
+  el.textContent = temp.toFixed(1);
+  const tColor = temp >= (thresholds.critical||95) ? 'var(--red)' : temp >= (thresholds.safe_max||80) ? 'var(--yellow)' : 'var(--green)';
+  el.style.color = tColor;
+  const pct = Math.min(100, ((temp - (thresholds.idle||30)) / ((thresholds.critical||95) - (thresholds.idle||30))) * 100);
+  document.getElementById('tempFill').style.width = Math.max(0,pct) + '%';
+  document.getElementById('tempFill').style.background = tColor;
+  document.getElementById('tempContext').textContent = tempContext(temp, thresholds);
+
+  // Action
+  const act = ACTION_MAP[d.action] || { icon:'❓', text:d.action, sub:'' };
+  document.getElementById('actionIcon').textContent = act.icon;
+  document.getElementById('actionText').textContent = act.text;
+  document.getElementById('actionSub').textContent = act.sub;
+
+  // Route
+  const rt = ROUTE_MAP[d.route] || { icon:'📡', text:d.route||'—', sub:'' };
+  document.getElementById('routeIcon').textContent = rt.icon;
+  document.getElementById('routeText').textContent = rt.text;
+  document.getElementById('routeSub').textContent = rt.sub;
+
+  // Sensor bars
+  const scores = { LSTM: d.lstm_score||0, AE: d.ae_score||0, IF: d.if_score||0, Vib: d.vib_score||0, Ctx: d.context_score||0 };
+  for (const [k,v] of Object.entries(scores)) {
+    const bar = document.getElementById('bar'+k);
+    const val = document.getElementById('val'+k);
+    if (bar) { bar.style.width = (v*100)+'%'; bar.style.background = barColor(v); }
+    if (val) val.textContent = v < 0.3 ? 'Good' : v < 0.6 ? 'Fair' : 'High';
+  }
+
+  // Latency
+  const lat = d.latency_ms || 0;
+  document.getElementById('latencyVal').textContent = lat.toFixed(1) + ' ms';
+  document.getElementById('latencyDesc').textContent = lat < 50 ? '✓ Meets real-time requirement (<50ms)' : '⚠ Above target latency';
+
+  // Chart
+  const timeLabel = fmtTime(d.timestamp);
+  tempChart.data.labels.push(timeLabel);
+  tempChart.data.datasets[0].data.push(temp);
+  tempChart.data.datasets[1].data.push(d.lstm_prediction || temp);
+  if (tempChart.data.labels.length > MAX_POINTS) {
+    tempChart.data.labels.shift();
+    tempChart.data.datasets.forEach(ds => ds.data.shift());
+  }
+  tempChart.update('none');
+
+  // Alert log
+  const sev = urg >= 0.8 ? 'critical' : urg >= 0.5 ? 'warning' : 'normal';
+  const alertText = d.alert || act.text;
+  alerts.unshift({ time: fmtTime(d.timestamp), text: alertText, sev, action: act.text });
+  if (alerts.length > 50) alerts.pop();
+  const logEl = document.getElementById('alertLog');
+  logEl.innerHTML = alerts.map(a =>
+    `<div class="alert-item alert-${a.sev}"><span class="alert-time">${a.time} · ${a.action}</span><br>${a.text}</div>`
+  ).join('');
+}
+
+// ── Machine switching ───────────────────────────────────────
+document.querySelectorAll('.machine-tab').forEach(tab => {
+  tab.addEventListener('click', async () => {
+    document.querySelectorAll('.machine-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    // Clear chart
+    tempChart.data.labels = [];
+    tempChart.data.datasets.forEach(ds => ds.data = []);
+    tempChart.update('none');
+    alerts = [];
+    try {
+      await fetch(API + '/api/switch_machine', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ machine_type_id: parseInt(tab.dataset.id) })
+      });
+    } catch(e) { console.error('Switch failed:', e); }
+  });
+});
+
+// ── Anomaly injection ───────────────────────────────────────
+async function inject(type) {
+  try {
+    await fetch(API + '/api/inject_anomaly', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ type })
+    });
+  } catch(e) { console.error('Inject failed:', e); }
+}
+async function resetSys() {
+  try {
+    await fetch(API + '/api/reset', { method:'POST' });
+    alerts = [];
+    document.getElementById('alertLog').innerHTML = '<div class="alert-item alert-normal"><span class="alert-time">Now</span><br>System reset to idle state</div>';
+  } catch(e) { console.error('Reset failed:', e); }
+}
+
+// ── Live/Demo Mode Toggle ───────────────────────────────────
+let isLive = false;
+async function toggleMode() {
+  try {
+    const res = await fetch(API + '/api/toggle_mode', { method:'POST' });
+    const data = await res.json();
+    isLive = data.mode === 'live';
+  } catch(e) {
+    console.error('Toggle failed:', e);
+    document.getElementById('modeToggle').checked = isLive;
+    return;
+  }
+  updateModeUI();
+  tempChart.data.labels = [];
+  tempChart.data.datasets.forEach(ds => ds.data = []);
+  tempChart.update('none');
+  alerts = [];
+}
+
+function updateModeUI() {
+  const badge = document.getElementById('modeBadge');
+  const tabs = document.getElementById('machineTabs');
+  const lblLive = document.getElementById('lblLive');
+  if (isLive) {
+    badge.className = 'mode-badge mode-live';
+    badge.textContent = '● LIVE HARDWARE';
+    tabs.style.opacity = '0.3';
+    tabs.style.pointerEvents = 'none';
+    lblLive.classList.add('active');
+  } else {
+    badge.className = 'mode-badge mode-demo';
+    badge.textContent = 'SIMULATION';
+    tabs.style.opacity = '1';
+    tabs.style.pointerEvents = 'auto';
+    lblLive.classList.remove('active');
+  }
+}
+</script>
+</body>
+</html>

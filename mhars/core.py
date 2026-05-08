@@ -210,7 +210,7 @@ class MHARS:
             print(f"  ⚠  Audio MFCC Pipeline not found: {e}")
 
     # ── Main pipeline ──────────────────────────────────────────────────────────
-    def run(self, temp_celsius: float, extra_scores: Optional[Dict] = None) -> MHARSResult:
+    def run(self, temp_celsius: float, extra_scores: Optional[Dict] = None, sync_alert: bool = False) -> MHARSResult:
         """
         Run the full MHARS pipeline on one temperature reading.
 
@@ -305,7 +305,7 @@ class MHARS:
             }
         )
 
-        # Step 8 — LLM alert (Non-blocking / Async)
+        # Step 8 — LLM alert
         alert_ctx = {
             "machine_type":   self.machine_name,
             "current_temp":   temp_celsius,
@@ -320,13 +320,19 @@ class MHARS:
                             f"Urgent action triggered: {action}.")
             result.llm_source = "edge_template"
         elif self._llm_gen is not None:
-            def on_alert_ready(res_dict):
-                result.alert = res_dict["alert"]
-                result.llm_source = res_dict["source"]
-                if self.verbose:
-                    print(f"\n  [ASYNC ALERT READY] {result.alert}")
-            
-            self._llm_gen.generate_async(alert_ctx, callback=on_alert_ready)
+            if sync_alert:
+                # Synchronous template alert — instant, used by dashboards
+                res = self._llm_gen.generate({**alert_ctx, '_force_template': True})
+                result.alert = res["alert"]
+                result.llm_source = res["source"]
+            else:
+                # Async LLM alert — used by batch scripts / edge deployment
+                def on_alert_ready(res_dict):
+                    result.alert = res_dict["alert"]
+                    result.llm_source = res_dict["source"]
+                    if self.verbose:
+                        print(f"\n  [ASYNC ALERT READY] {result.alert}")
+                self._llm_gen.generate_async(alert_ctx, callback=on_alert_ready)
         else:
             result.alert = f"[{self.machine_name}] {temp_celsius:.1f}°C — action: {action}."
             result.llm_source = "fallback"
