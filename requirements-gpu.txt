@@ -1,0 +1,18 @@
+# MHARS — GPU Dependencies (for CUDA-enabled machines)
+# Install with: pip install -r requirements-gpu.txt
+#
+# This file is for machines with NVIDIA GPUs and CUDA toolkit installed.
+# For CPU-only, use requirements-core.txt instead.
+
+# PyTorch with CUDA support
+# Replace cu121 with your CUDA version (cu118, cu121, cu124)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+torchvision>=0.15.0
+
+# LLM with GPU acceleration
+# For CUDA: CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python
+llama-cpp-python>=0.2.0
+
+# All core dependencies
+-r requirements-core.txt

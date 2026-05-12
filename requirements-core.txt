@@ -1,0 +1,33 @@
+# MHARS — Core Dependencies (range-pinned for cross-platform compatibility)
+# Install with: pip install -r requirements-core.txt
+
+# Web framework
+fastapi>=0.100.0
+uvicorn>=0.20.0
+starlette>=0.27.0
+websockets>=11.0
+pydantic>=2.0
+
+# ML / Deep Learning (CPU-compatible)
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+scipy>=1.10.0
+
+# Reinforcement Learning
+stable-baselines3>=2.0.0
+gymnasium>=0.29.0
+
+# PyTorch — CPU version (see requirements-gpu.txt for CUDA)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Visualization
+matplotlib>=3.7.0
+pillow>=9.5.0
+
+# LLM (optional — falls back to templates if not installed)
+# llama-cpp-python>=0.2.0
+
+# System monitoring
+psutil>=5.9.0

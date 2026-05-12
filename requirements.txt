@@ -1,3 +1,9 @@
+# ⚠  DEPRECATED — This file is a frozen snapshot from the dev machine.
+# For new installations, use:
+#   pip install -r requirements-core.txt      (CPU, cross-platform)
+#   pip install -r requirements-gpu.txt       (NVIDIA CUDA)
+#
+# This file is kept for reproducibility of the exact dev environment.
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0

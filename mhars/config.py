@@ -31,10 +31,19 @@ class Config:
     }
 
     MACHINE_PROFILES = {
-        0: {"name": "CPU",    "safe_max": 85.0,  "critical": 100.0, "idle": 45.0},
-        1: {"name": "Motor",  "safe_max": 80.0,  "critical": 95.0,  "idle": 40.0},
-        2: {"name": "Server", "safe_max": 75.0,  "critical": 90.0,  "idle": 35.0},
-        3: {"name": "Engine", "safe_max": 100.0, "critical": 115.0, "idle": 60.0},
+        # Issue 2 — RC thermal circuit model parameters per machine type:
+        #   thermal_mass_J_K  = thermal capacitance (Joules per Kelvin)
+        #   conv_coeff        = convective heat transfer coefficient (W/K)
+        #   target_temp       = ideal operating temperature for tracking reward
+        #   heat_rate         = max heat generation rate (°C/step)
+        0: {"name": "CPU",    "safe_max": 85.0,  "critical": 100.0, "idle": 45.0,
+            "thermal_mass_J_K": 12.0, "conv_coeff": 0.08, "target_temp": 65.0, "heat_rate": 2.5},
+        1: {"name": "Motor",  "safe_max": 80.0,  "critical": 95.0,  "idle": 40.0,
+            "thermal_mass_J_K": 25.0, "conv_coeff": 0.05, "target_temp": 60.0, "heat_rate": 1.8},
+        2: {"name": "Server", "safe_max": 75.0,  "critical": 90.0,  "idle": 35.0,
+            "thermal_mass_J_K": 18.0, "conv_coeff": 0.07, "target_temp": 55.0, "heat_rate": 1.5},
+        3: {"name": "Engine", "safe_max": 100.0, "critical": 115.0, "idle": 60.0,
+            "thermal_mass_J_K": 40.0, "conv_coeff": 0.03, "target_temp": 80.0, "heat_rate": 3.8},
     }
 
     # ── RL Router thresholds ──────────────────────────────────────────────────
@@ -51,6 +60,18 @@ class Config:
     PPO_N_ENVS       = 4
     PPO_CLIP_RANGE   = 0.2
     PPO_LEARNING_RATE = 3e-4
+
+    # Issue 3 — Configurable reward function weights
+    # Operators can tune these without touching Python logic
+    PPO_REWARD = {
+        "safe_bonus":           1.0,   # reward per step temp is in safe range
+        "tracking_weight":     -0.5,   # penalty scaled by |temp - target|/target
+        "unnecessary_action":  -2.0,   # penalty for intervening when temp is fine
+        "breach_penalty":     -10.0,   # hard penalty for critical temp / damage
+        "overshoot_scale":     -3.0,   # scaled penalty when between safe_max and critical
+        "oscillation_penalty": -0.3,   # penalty for changing action every step
+        "fan_energy_cost":     -0.05,  # small ongoing cost for running fan at max
+    }
 
     # ── LLM settings ─────────────────────────────────────────────────────────
     LLM_MAX_TOKENS  = 120
