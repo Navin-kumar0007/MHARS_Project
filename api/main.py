@@ -32,8 +32,9 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -41,16 +42,32 @@ from mhars.core import MHARS
 from mhars.system_health import SystemHealthMonitor
 from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
 
+# ── Authentication ─────────────────────────────────────────────────────────────
+# Set MHARS_API_KEY environment variable to enable API key protection.
+# When not set, auth is disabled (development mode).
+MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_api_key(api_key: str = Depends(api_key_header)):
+    """Verify API key if MHARS_API_KEY is configured."""
+    if not MHARS_API_KEY:
+        return  # Auth disabled in development
+    if api_key != MHARS_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+
 # ── App Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="MHARS Dashboard API",
     description="Real-time monitoring backend for the MHARS Digital Twin",
     version="2.0.0",
+    dependencies=[Depends(verify_api_key)],  # Protects all routes
 )
 
+# CORS — restrict origins in production via MHARS_CORS_ORIGINS env var
+allowed_origins = os.environ.get("MHARS_CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

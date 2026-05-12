@@ -70,8 +70,20 @@ python -m venv venv
 source venv/bin/activate        # Mac/Linux
 # venv\Scripts\activate         # Windows
 
-# 3. Install dependencies
-pip install -r requirements.txt
+# 3. Install dependencies (cross-platform)
+pip install -r requirements-core.txt
+
+# 4. Configure environment
+cp .env.example .env
+# Edit .env to set API key, ports, etc.
+
+# 5. Install MHARS as editable package
+pip install -e .
+```
+
+### Optional: GPU Acceleration
+```bash
+pip install -r requirements-gpu.txt
 ```
 
 ### Optional: Phi-3 Mini LLM (for real language alerts)
@@ -89,17 +101,22 @@ pip install llama-cpp-python
 
 ```python
 from mhars import MHARS
+from mhars.schemas import SensorReading
 
 # Initialise for CPU monitoring
 system = MHARS(machine_type_id=0)   # 0=CPU 1=Motor 2=Server 3=Engine
 
-# Process one temperature reading
-result = system.run(temp_celsius=72.5)
+# Process a multi-sensor reading
+reading = SensorReading(temp_c=72.5, load_pct=0.85, ambient_c=24.0)
+result = system.run(reading)
 
 print(result.action)        # "fan+"
 print(result.route)         # "both"
 print(result.urgency)       # 0.68
 print(result.alert)         # plain language alert text
+
+# Backward compatible: single temperature float still works
+result = system.run(temp_celsius=72.5)
 ```
 
 ### Run the demo
@@ -108,14 +125,31 @@ print(result.alert)         # plain language alert text
 python demo.py
 ```
 
-### Run the live dashboard
+### Run the full-stack dashboard
 
-```python
-from mhars import MHARS, Dashboard
+```bash
+# Terminal 1 — Backend API
+source venv/bin/activate
+uvicorn api.main:app --host 127.0.0.1 --port 8000
 
-system = MHARS(machine_type_id=0)
-dash   = Dashboard(system)
-dash.start(source="simulation")   # or "sensor" for real hardware
+# Terminal 2 — Open the static dashboard
+open dashboard_web.html     # macOS
+# Or open http://localhost:8000 in browser
+
+# Terminal 3 (optional) — Next.js dashboard
+cd dashboard
+npm install && npm run dev
+# Opens at http://localhost:3000
+```
+
+### Docker deployment (full stack)
+
+```bash
+cp .env.example .env
+# Edit .env to set MHARS_API_KEY for production
+docker-compose up --build
+# Dashboard: http://localhost:3000
+# API:       http://localhost:8000/docs
 ```
 
 ---
