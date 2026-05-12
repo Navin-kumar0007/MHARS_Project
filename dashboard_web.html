@@ -102,6 +102,28 @@ header .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block
 .mode-badge{font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
 .mode-demo{background:rgba(99,102,241,.15);color:var(--accent);border:1px solid rgba(99,102,241,.3)}
 .mode-live{background:rgba(16,185,129,.15);color:var(--green);border:1px solid rgba(16,185,129,.3);animation:pulse 1.5s infinite}
+
+/* System Health Panel */
+.sys-health-panel{display:none;margin-bottom:16px}
+.sys-health-panel.visible{display:block}
+.sys-grid{display:grid;grid-template-columns:repeat(5, 1fr);gap:12px;margin-bottom:12px}
+.sys-card{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:12px}
+.sys-label{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.sys-val{font-size:20px;font-weight:800;margin-bottom:4px}
+.sys-verdict{font-size:11px;font-weight:600}
+.sys-status-healthy{color:var(--green)}
+.sys-status-warning{color:var(--orange)}
+.sys-status-critical{color:var(--red)}
+.sys-ai-summary{background:rgba(99,102,241,.05);border:1px solid rgba(99,102,241,.2);border-radius:12px;padding:12px;font-size:13px;line-height:1.5;color:var(--text);border-left:3px solid var(--accent)}
+@media(max-width:900px){.sys-grid{grid-template-columns:repeat(2, 1fr)}}
+@media(max-width:600px){.sys-grid{grid-template-columns:1fr}}
+
+/* RUL Badge */
+.rul-badge{display:inline-block;font-size:10px;font-weight:700;padding:4px 10px;border-radius:10px;margin-top:8px;text-transform:uppercase;letter-spacing:0.5px}
+.rul-hidden{display:none}
+.rul-ok{background:rgba(100,116,139,.15);color:var(--muted);border:1px solid rgba(100,116,139,.3)}
+.rul-warn{background:rgba(245,158,11,.15);color:var(--yellow);border:1px solid rgba(245,158,11,.3)}
+.rul-crit{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);animation:pulse 1s infinite}
 </style>
 </head>
 <body>
@@ -138,11 +160,26 @@ header .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block
   <div class="machine-tab" data-id="3">🔧 Engine</div>
 </div>
 
+<!-- System Health Panel (Always Visible) -->
+<div class="card sys-health-panel" id="sysHealthPanel" style="display:block">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div class="card-label" style="margin-bottom:0;color:var(--accent);font-size:13px" id="sysHealthTitle">SYSTEM HEALTH</div>
+    <div class="card-label" style="margin-bottom:0" id="sysOverallScore">Score: --/100</div>
+  </div>
+  <div class="sys-grid" id="sysHealthGrid">
+    <!-- Dynamically populated by JS -->
+  </div>
+  <div class="sys-ai-summary" id="sysAiSummary">
+    Waiting for AI analysis...
+  </div>
+</div>
+
 <!-- Row 1: Health / Temp / Action / Route -->
 <div class="grid grid-4" style="margin-bottom:16px">
   <div class="card" id="healthCard">
     <div class="card-label">Machine Health</div>
     <div id="healthBadge" class="health-badge health-healthy">● Healthy</div>
+    <div id="faultBadge" class="health-badge health-critical" style="display:none;font-size:11px;margin-top:8px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);padding:4px 8px">⚙️ Fault: Unknown</div>
     <div class="card-sub" id="healthDesc">All systems operating normally</div>
   </div>
   <div class="card temp-display">
@@ -150,6 +187,7 @@ header .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block
     <div><span id="tempNum" class="temp-number" style="color:var(--green)">--</span><span class="temp-unit">°C</span></div>
     <div class="temp-bar"><div id="tempFill" class="temp-fill" style="width:0;background:var(--green)"></div></div>
     <div class="card-sub" id="tempContext">Waiting for data...</div>
+    <div id="rulBadge" class="rul-badge rul-hidden">⏱ -- min</div>
   </div>
   <div class="card" id="actionCard">
     <div class="card-label">AI Decision</div>
@@ -172,14 +210,15 @@ header .status-dot{width:10px;height:10px;border-radius:50%;display:inline-block
     <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
   </div>
   <div class="card">
-    <div class="card-label">Sensor Health Overview</div>
+    <div class="card-label">AI Decision Explanation (XAI)</div>
     <div id="sensorBars">
-      <div class="sensor-row"><span class="sensor-name">Trend Forecast</span><div class="sensor-bar"><div class="sensor-fill" id="barLSTM" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valLSTM">—</span></div>
-      <div class="sensor-row"><span class="sensor-name">Pattern Check</span><div class="sensor-bar"><div class="sensor-fill" id="barAE" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valAE">—</span></div>
-      <div class="sensor-row"><span class="sensor-name">Outlier Scan</span><div class="sensor-bar"><div class="sensor-fill" id="barIF" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valIF">—</span></div>
-      <div class="sensor-row"><span class="sensor-name">Vibration</span><div class="sensor-bar"><div class="sensor-fill" id="barVib" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valVib">—</span></div>
-      <div class="sensor-row"><span class="sensor-name">Combined</span><div class="sensor-bar"><div class="sensor-fill" id="barCtx" style="width:10%;background:var(--green)"></div></div><span class="sensor-val" id="valCtx">—</span></div>
+      <div class="sensor-row"><span class="sensor-name">Trend Forecast</span><div class="sensor-bar"><div class="sensor-fill" id="barLSTM" style="width:0;background:var(--blue)"></div></div><span class="sensor-val" id="valLSTM">0%</span></div>
+      <div class="sensor-row"><span class="sensor-name">Pattern Check</span><div class="sensor-bar"><div class="sensor-fill" id="barAE" style="width:0;background:var(--blue)"></div></div><span class="sensor-val" id="valAE">0%</span></div>
+      <div class="sensor-row"><span class="sensor-name">Outlier Scan</span><div class="sensor-bar"><div class="sensor-fill" id="barIF" style="width:0;background:var(--blue)"></div></div><span class="sensor-val" id="valIF">0%</span></div>
+      <div class="sensor-row"><span class="sensor-name">Vibration</span><div class="sensor-bar"><div class="sensor-fill" id="barVib" style="width:0;background:var(--blue)"></div></div><span class="sensor-val" id="valVib">0%</span></div>
+      <div class="sensor-row"><span class="sensor-name">Audio</span><div class="sensor-bar"><div class="sensor-fill" id="barAudio" style="width:0;background:var(--blue)"></div></div><span class="sensor-val" id="valAudio">0%</span></div>
     </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:8px;font-style:italic" id="xaiTopDesc">Waiting for decision context...</div>
     <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border)">
       <div class="card-label">Response Time</div>
       <div style="font-size:24px;font-weight:800" id="latencyVal">— ms</div>
@@ -307,13 +346,69 @@ function update(d) {
   thresholds = d.thresholds || {};
   const urg = d.urgency || 0;
 
+  // ── Backwards-compatible metadata resolution ──────────────
+  // The backend sends individual scores at the top level (if_score, lstm_score, etc.)
+  // AND may also send a nested "metadata" dict with contributions/fault_type/rul.
+  // If the nested metadata is missing (old server), we compute XAI from top-level scores.
+  let meta = d.metadata || {};
+  
+  // Compute contributions from top-level scores if metadata doesn't have them
+  if (!meta.contributions) {
+    const scores = {
+      trend_forecast: d.lstm_score || 0,
+      pattern_check:  d.ae_score   || 0,
+      outlier_scan:   d.if_score   || 0,
+      vibration:      d.vib_score  || 0,
+      audio:          0.05  // default baseline when not provided
+    };
+    const total = Object.values(scores).reduce((a, b) => a + b, 0) || 1;
+    meta.contributions = {};
+    let topKey = 'none', topVal = 0;
+    for (const [k, v] of Object.entries(scores)) {
+      const pct = Math.round((v / total) * 100);
+      meta.contributions[k] = pct;
+      if (pct > topVal) { topVal = pct; topKey = k; }
+    }
+    meta.top_contributor = urg > 0.05 ? topKey : 'none';
+    
+  }
+
+  // 0. System Health Panel (Dynamic for all modes)
+  if (d.system_health) {
+    const sh = d.system_health;
+    document.getElementById('sysHealthTitle').textContent = sh.title;
+    document.getElementById('sysOverallScore').textContent = `Score: ${sh.overall_score}/100`;
+    document.getElementById('sysAiSummary').textContent = sh.ai_summary;
+    
+    const grid = document.getElementById('sysHealthGrid');
+    grid.innerHTML = ''; // Clear previous
+    sh.components.forEach(c => {
+      grid.innerHTML += `
+        <div class="sys-card">
+          <div class="sys-label">${c.icon} ${c.name}</div>
+          <div class="sys-val" style="${c.val.length > 8 ? 'font-size:14px' : ''}">${c.val}</div>
+          <div class="sys-verdict sys-status-${c.status}">● ${c.verdict}</div>
+        </div>
+      `;
+    });
+  }
+
   // Health badge
   const h = healthLevel(urg);
   const badge = document.getElementById('healthBadge');
+  const fb = document.getElementById('faultBadge');
   badge.className = 'health-badge ' + h.cls;
   badge.textContent = h.label;
   document.getElementById('healthDesc').textContent = h.desc;
   document.getElementById('headerBadge').innerHTML = `<span class="health-badge ${h.cls}">${h.label}</span>`;
+
+  // Anomaly Fingerprint
+  if (meta.fault_type && meta.fault_type !== "Normal Operations") {
+    fb.style.display = 'inline-block';
+    fb.textContent = `🚨 IDENTIFIED: ${meta.fault_type}`;
+  } else {
+    fb.style.display = 'none';
+  }
 
   // Temperature
   const temp = d.current_temp || 0;
@@ -326,7 +421,28 @@ function update(d) {
   document.getElementById('tempFill').style.background = tColor;
   document.getElementById('tempContext').textContent = tempContext(temp, thresholds);
 
-  // Action
+  // RUL Countdown
+  const rulBadge = document.getElementById('rulBadge');
+  let rulMinutes = meta.rul_minutes;
+  
+  if (rulMinutes !== undefined && rulMinutes !== null) {
+    const rul = rulMinutes;
+    rulBadge.classList.remove('rul-hidden', 'rul-ok', 'rul-warn', 'rul-crit');
+    if (rul > 60) {
+      rulBadge.classList.add('rul-ok');
+      rulBadge.textContent = `⏱ > 1h to threshold`;
+    } else if (rul > 15) {
+      rulBadge.classList.add('rul-warn');
+      rulBadge.textContent = `⏱ ${Math.round(rul)} min to threshold`;
+    } else {
+      rulBadge.classList.add('rul-crit');
+      rulBadge.textContent = `⏱ ${Math.round(rul)} min — ACT NOW`;
+    }
+  } else {
+    rulBadge.className = 'rul-badge rul-hidden';
+  }
+
+  // Action — also update AI Decision card to reflect urgency for consistency
   const act = ACTION_MAP[d.action] || { icon:'❓', text:d.action, sub:'' };
   document.getElementById('actionIcon').textContent = act.icon;
   document.getElementById('actionText').textContent = act.text;
@@ -338,13 +454,26 @@ function update(d) {
   document.getElementById('routeText').textContent = rt.text;
   document.getElementById('routeSub').textContent = rt.sub;
 
-  // Sensor bars
-  const scores = { LSTM: d.lstm_score||0, AE: d.ae_score||0, IF: d.if_score||0, Vib: d.vib_score||0, Ctx: d.context_score||0 };
-  for (const [k,v] of Object.entries(scores)) {
-    const bar = document.getElementById('bar'+k);
-    const val = document.getElementById('val'+k);
-    if (bar) { bar.style.width = (v*100)+'%'; bar.style.background = barColor(v); }
-    if (val) val.textContent = v < 0.3 ? 'Good' : v < 0.6 ? 'Fair' : 'High';
+  // XAI Contribution Bars — always render from resolved meta
+  const c = meta.contributions;
+  if (c) {
+    const map = { LSTM: c.trend_forecast||0, AE: c.pattern_check||0, IF: c.outlier_scan||0, Vib: c.vibration||0, Audio: c.audio||0 };
+    for (const [k,v] of Object.entries(map)) {
+      const bar = document.getElementById('bar'+k);
+      const val = document.getElementById('val'+k);
+      if (bar) { bar.style.width = v + '%'; bar.style.background = v > 30 ? 'var(--blue)' : 'var(--border)'; }
+      if (val) val.textContent = v + '%';
+    }
+    const topDesc = document.getElementById('xaiTopDesc');
+    if (meta.top_contributor && meta.top_contributor !== 'none') {
+      const names = { trend_forecast: "Trend Forecast", pattern_check: "Pattern Check", outlier_scan: "Outlier Scan", vibration: "Vibration", audio: "Audio Profile" };
+      const topName = names[meta.top_contributor] || meta.top_contributor;
+      topDesc.textContent = `💡 Decision driven primarily by: ${topName}`;
+      topDesc.style.color = 'var(--blue)';
+    } else {
+      topDesc.textContent = "System stable. No significant risk factors.";
+      topDesc.style.color = 'var(--muted)';
+    }
   }
 
   // Latency
@@ -431,19 +560,14 @@ async function toggleMode() {
 
 function updateModeUI() {
   const badge = document.getElementById('modeBadge');
-  const tabs = document.getElementById('machineTabs');
   const lblLive = document.getElementById('lblLive');
   if (isLive) {
     badge.className = 'mode-badge mode-live';
     badge.textContent = '● LIVE HARDWARE';
-    tabs.style.opacity = '0.3';
-    tabs.style.pointerEvents = 'none';
     lblLive.classList.add('active');
   } else {
     badge.className = 'mode-badge mode-demo';
     badge.textContent = 'SIMULATION';
-    tabs.style.opacity = '1';
-    tabs.style.pointerEvents = 'auto';
     lblLive.classList.remove('active');
   }
 }

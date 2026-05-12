@@ -259,8 +259,8 @@ class MHARS:
             audio_score = aud_res["audio_score"]
             audio_var   = aud_res["audio_variance"]
 
-        # Step 5 — Attention fusion → context score + urgency
-        context, urgency = self._fuse(
+        # Step 5 — Attention fusion → context score + urgency + XAI
+        context, urgency, contributions, top_contributor = self._fuse(
             lstm_score = lstm_score,
             ae_score   = ae_score,
             if_score   = if_score,
@@ -269,6 +269,9 @@ class MHARS:
             cnn_var    = cnn_var,
             audio_var  = audio_var,
         )
+
+        # Step 5.5 — Anomaly Fingerprinting
+        fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius)
 
         # Step 6 — RL Router decision
         route = self._route(urgency)
@@ -281,6 +284,9 @@ class MHARS:
         self._steps_since_action = (
             0 if action != "do-nothing" else self._steps_since_action + 1
         )
+        
+        # Step 7.5 — Estimate RUL
+        rul_minutes = self._estimate_rul(temp_celsius, lstm_pred_celsius, self.profile["safe_max"])
 
         # Create Result object first
         result = MHARSResult(
@@ -301,7 +307,9 @@ class MHARS:
                 "if_score": if_score, "lstm_score": lstm_score,
                 "ae_score": ae_score, "vib_score": vib_score,
                 "cnn_score": cnn_score, "audio_score": audio_score,
-                "context_score": context,
+                "context_score": context, "rul_minutes": rul_minutes,
+                "contributions": contributions, "top_contributor": top_contributor,
+                "fault_type": fault_type
             }
         )
 
@@ -454,7 +462,20 @@ class MHARS:
         context = float(np.clip(np.dot(weights, scores), 0, 1))
         top2    = np.sort(scores)[-2:]
         urgency = float(np.clip(0.6 * top2[-1] + 0.4 * top2[-2], 0, 1))
-        return context, urgency
+        
+        # XAI Contributions
+        # Prevent division by zero if all scores are 0
+        total_impact = np.dot(weights, scores) + 1e-8
+        contrib = {
+            "trend_forecast": round((weights[0] * scores[0] / total_impact) * 100),
+            "pattern_check":  round((weights[1] * scores[1] / total_impact) * 100),
+            "outlier_scan":   round((weights[2] * scores[2] / total_impact) * 100),
+            "vibration":      round((weights[3] * scores[3] / total_impact) * 100),
+            "audio":          round((weights[4] * scores[4] / total_impact) * 100),
+        }
+        top_contributor = max(contrib, key=contrib.get) if context > 0.05 else "none"
+
+        return context, urgency, contrib, top_contributor
 
     def _route(self, urgency: float) -> str:
         if urgency >= Config.EDGE_URGENCY_THRESHOLD:
@@ -498,6 +519,37 @@ class MHARS:
         elif urgency > 0.35:
             return "alert"
         return "do-nothing"
+
+    def _estimate_rul(self, current_temp: float, predicted_temp: float, safe_max: float) -> Optional[float]:
+        """Estimate remaining useful life in minutes before hitting safe_max."""
+        delta_per_10min = predicted_temp - current_temp
+        if delta_per_10min <= 0:
+            return None  # Temperature falling or stable — no immediate RUL concern
+            
+        remaining_degrees = safe_max - current_temp
+        if remaining_degrees <= 0:
+            return 0.0  # Already past threshold
+            
+        minutes = (remaining_degrees / delta_per_10min) * 10.0
+        return round(min(minutes, 999.0), 1)
+
+    def _fingerprint_anomaly(self, urgency: float, top_contributor: str, current_temp: float) -> str:
+        """Map abstract ML scores to physical fault signatures."""
+        if urgency < 0.4:
+            return "Normal Operations"
+            
+        if top_contributor == "vibration":
+            return "Bearing / Mechanical Wear"
+        elif top_contributor == "audio":
+            return "Acoustic Cavitation / Grinding"
+        elif top_contributor == "trend_forecast":
+            return "Thermal Runaway"
+        elif top_contributor == "pattern_check" and current_temp > self.profile["safe_max"] * 0.8:
+            return "Cooling System Failure"
+        elif top_contributor == "outlier_scan":
+            return "Sensor Glitch / Power Surge"
+            
+        return "Unknown System Stress"
 
     # (Alert generation is now inline async in run())
 
