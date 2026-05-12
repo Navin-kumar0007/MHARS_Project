@@ -32,9 +32,8 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -46,21 +45,25 @@ from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
 # Set MHARS_API_KEY environment variable to enable API key protection.
 # When not set, auth is disabled (development mode).
 MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-async def verify_api_key(api_key: str = Depends(api_key_header)):
-    """Verify API key if MHARS_API_KEY is configured."""
+async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
+    """Verify API key for HTTP routes (if MHARS_API_KEY is configured)."""
     if not MHARS_API_KEY:
         return  # Auth disabled in development
     if api_key != MHARS_API_KEY:
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
+
+def verify_ws_token(token: str) -> bool:
+    """Verify API key for WebSocket connections (via query param)."""
+    if not MHARS_API_KEY:
+        return True  # Auth disabled in development
+    return token == MHARS_API_KEY
 
 # ── App Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="MHARS Dashboard API",
     description="Real-time monitoring backend for the MHARS Digital Twin",
     version="2.0.0",
-    dependencies=[Depends(verify_api_key)],  # Protects all routes
 )
 
 # CORS — restrict origins in production via MHARS_CORS_ORIGINS env var
@@ -246,7 +249,7 @@ async def get_system_status():
     }
 
 
-@app.post("/api/inject_anomaly")
+@app.post("/api/inject_anomaly", dependencies=[Depends(verify_api_key)])
 async def inject_anomaly(req: AnomalyRequest):
     """Inject one of 5 anomaly types for live demonstration."""
     if req.type not in ANOMALY_PROFILES:
@@ -266,7 +269,7 @@ async def inject_anomaly(req: AnomalyRequest):
     }
 
 
-@app.post("/api/switch_machine")
+@app.post("/api/switch_machine", dependencies=[Depends(verify_api_key)])
 async def switch_machine(req: MachineRequest):
     """Switch to a different machine type. Reinitializes the entire AI pipeline."""
     if req.machine_type_id not in MACHINE_PROFILES:
@@ -283,7 +286,7 @@ async def switch_machine(req: MachineRequest):
     }
 
 
-@app.post("/api/reset")
+@app.post("/api/reset", dependencies=[Depends(verify_api_key)])
 async def reset_system():
     """Reset the environment to idle state without changing machine type."""
     state.env.reset()
@@ -307,7 +310,7 @@ async def get_alert_history():
     return {"alerts": list(state.alert_history)}
 
 
-@app.post("/api/toggle_mode")
+@app.post("/api/toggle_mode", dependencies=[Depends(verify_api_key)])
 async def toggle_mode():
     """Toggle between live hardware mode and simulation demo mode."""
     state.live_mode = not state.live_mode
@@ -343,11 +346,17 @@ async def get_system_health():
 
 # ── WebSocket Telemetry Stream ─────────────────────────────────────────────────
 @app.websocket("/ws/telemetry")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(default="")):
     """
     Streams live telemetry data at 1Hz with the FULL expanded payload.
     Every internal AI variable is exposed for complete dashboard transparency.
+    Auth via: ws://host:port/ws/telemetry?token=YOUR_KEY (when MHARS_API_KEY is set)
     """
+    # Verify WebSocket auth
+    if not verify_ws_token(token):
+        await websocket.close(code=4003, reason="Invalid API key")
+        return
+
     await websocket.accept()
     print("[WebSocket] Client connected.")
 
