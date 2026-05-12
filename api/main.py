@@ -340,14 +340,29 @@ async def websocket_endpoint(websocket: WebSocket):
             if state.live_mode:
                 # LIVE MODE: read real hardware CPU temperature
                 current_temp = read_hardware_temp()
+                # Build SensorReading with real hardware context
+                from mhars.schemas import SensorReading
+                cpu_pct = psutil.cpu_percent(interval=0) / 100.0 if PSUTIL_AVAILABLE else 0.5
+                sr = SensorReading(
+                    temp_c=current_temp,
+                    load_pct=cpu_pct,
+                    ambient_c=25.0,  # could be from external sensor
+                )
             else:
                 # DEMO MODE: simulated environment + anomaly injection
                 state.env.temp = apply_anomaly_to_temp(state.env.temp)
                 current_temp = state.env.temp
+                # Build SensorReading with simulation context
+                from mhars.schemas import SensorReading
+                sr = SensorReading(
+                    temp_c=current_temp,
+                    load_pct=getattr(state.env, 'load_level', 0.5),
+                    ambient_c=25.0,
+                )
 
             # ── Step 2: Run the complete MHARS AI pipeline ─────────────────
             # Run in threadpool to prevent blocking the WebSocket event loop during heavy ML inferences
-            result = await run_in_threadpool(state.mhars.run, temp_celsius=current_temp, sync_alert=True)
+            result = await run_in_threadpool(state.mhars.run, temp_celsius=sr, sync_alert=True)
 
             # ── Step 3: Apply PPO action feedback to the simulation ────────
             action_effects = {

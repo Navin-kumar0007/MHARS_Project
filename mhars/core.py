@@ -16,8 +16,10 @@ Usage:
 import os, sys, json, time, pickle
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from collections import deque
+
+from mhars.schemas import SensorReading
 
 # ── Optional torch import ─────────────────────────────────────────────────────
 try:
@@ -93,6 +95,18 @@ class MHARS:
         # Rolling window for LSTM (last 12 readings)
         self._temp_window = deque(maxlen=Config.LSTM_WINDOW)
         self._steps_since_action = 0
+
+        # Issue 4 — Temporal context: full reading history for dT/dt
+        self._reading_history: deque = deque(maxlen=60)  # 60 sec @ 1Hz
+
+        # Issue 5 — Online anomaly detection: rolling retrain buffer
+        self._if_retrain_buffer: deque = deque(maxlen=500)
+        self._if_retrain_interval = 100  # retrain every N samples
+        self._if_sample_count = 0
+
+        # Issue 6 — Uncertainty quantification: track recent score variance
+        self._recent_urgencies: deque = deque(maxlen=30)
+        self._recent_contexts: deque  = deque(maxlen=30)
 
         print(f"[MHARS] Initialising for machine: {self.machine_name}")
         self._load_models(llm_path)
@@ -210,15 +224,17 @@ class MHARS:
             print(f"  ⚠  Audio MFCC Pipeline not found: {e}")
 
     # ── Main pipeline ──────────────────────────────────────────────────────────
-    def run(self, temp_celsius: float, extra_scores: Optional[Dict] = None, sync_alert: bool = False) -> MHARSResult:
+    def run(self, temp_celsius: Union[float, 'SensorReading'] = None,
+            extra_scores: Optional[Dict] = None,
+            sync_alert: bool = False,
+            reading: Optional['SensorReading'] = None) -> MHARSResult:
         """
-        Run the full MHARS pipeline on one temperature reading.
+        Run the full MHARS pipeline on a sensor reading.
 
-        Args:
-            temp_celsius:  current temperature in degrees Celsius
-            extra_scores:  optional dict with pre-computed scores:
-                           {"cnn_score": 0.3, "audio_score": 0.5,
-                            "cnn_var": None, "audio_var": None}
+        Accepts EITHER:
+          - temp_celsius (float) for backward compatibility
+          - reading (SensorReading) for full multi-sensor context
+          - temp_celsius as a SensorReading object directly
 
         Returns:
             MHARSResult with action, alert, route, and all scores.
@@ -226,16 +242,56 @@ class MHARS:
         t0 = time.perf_counter()
         extra = extra_scores or {}
 
+        # Issue 1 — Accept SensorReading or bare float
+        if reading is not None:
+            sr = reading
+        elif isinstance(temp_celsius, SensorReading):
+            sr = temp_celsius
+        elif temp_celsius is not None:
+            sr = SensorReading.from_temp_only(float(temp_celsius))
+        else:
+            raise ValueError("Must provide temp_celsius or reading")
+
+        # Issue 4 — Auto-compute dT/dt from history if not provided
+        if sr.dT_dt is None and len(self._reading_history) >= 2:
+            prev = self._reading_history[-1]
+            sr.dT_dt = sr.temp_c - prev.temp_c  # °C/sec at 1Hz
+        elif sr.dT_dt is None:
+            sr.dT_dt = 0.0
+        self._reading_history.append(sr)
+
+        temp_celsius_val = sr.temp_c
+
         # Step 1 — Normalize temperature
-        temp_norm = self._normalize_temp(temp_celsius)
+        temp_norm = self._normalize_temp(temp_celsius_val)
         self._temp_window.append(temp_norm)
 
         # Step 2 — Isolation Forest noise check
         if_score = self._compute_if_score(temp_norm)
 
+        # Issue 5 — Online anomaly detection retrain
+        self._if_sample_count += 1
+        if self._if_model is not None:
+            window_data = list(self._temp_window)
+            if len(window_data) >= 5:
+                feat = np.array([[
+                    temp_norm,
+                    float(np.mean(window_data[-3:])),
+                    float(np.mean(window_data[-5:])),
+                    abs(window_data[-1] - window_data[-2]) if len(window_data) >= 2 else 0.0,
+                    float(np.std(window_data[-5:])),
+                ]])
+                self._if_retrain_buffer.append(feat[0])
+            if (self._if_sample_count % self._if_retrain_interval == 0
+                    and len(self._if_retrain_buffer) >= 50):
+                self._retrain_if()
+
         # Step 3 — LSTM prediction
         lstm_pred_norm, lstm_score = self._compute_lstm_score(temp_norm)
         lstm_pred_celsius = self._denormalize_temp(lstm_pred_norm)
+
+        # Issue 1 — Use load context to modulate anomaly interpretation
+        load_factor = 1.0 + (1.0 - sr.load_pct) * 0.3  # idle amplifies anomaly
 
         # Step 4 — Autoencoder anomaly score
         ae_score = self._compute_ae_score()
@@ -250,12 +306,12 @@ class MHARS:
         audio_var   = extra.get("audio_var", None)
 
         if self._cnn is not None and "cnn_score" not in extra:
-            cnn_res = self._cnn.predict_from_temperature(temp_celsius, self.profile["safe_max"])
+            cnn_res = self._cnn.predict_from_temperature(temp_celsius_val, self.profile["safe_max"])
             cnn_score = cnn_res["hotspot_score"]
             cnn_var   = cnn_res["grid_variance"]
             
         if self._audio is not None and "audio_score" not in extra:
-            aud_res = self._audio.process_from_temperature(temp_celsius, self.profile["safe_max"])
+            aud_res = self._audio.process_from_temperature(temp_celsius_val, self.profile["safe_max"])
             audio_score = aud_res["audio_score"]
             audio_var   = aud_res["audio_variance"]
 
@@ -271,28 +327,34 @@ class MHARS:
         )
 
         # Step 5.5 — Anomaly Fingerprinting
-        fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius)
+        fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius_val)
 
         # Step 6 — RL Router decision
         route = self._route(urgency)
 
         # Step 7 — PPO action
         obs    = self._build_obs(temp_norm, lstm_pred_norm, ae_score, urgency)
-        action = self._decide(obs, temp_celsius)
+        action = self._decide(obs, temp_celsius_val)
 
         latency_ms = (time.perf_counter() - t0) * 1000
+
+        # Issue 6 — Uncertainty quantification
+        self._recent_urgencies.append(urgency)
+        self._recent_contexts.append(context)
+        urgency_confidence = 1.0 - float(np.std(list(self._recent_urgencies))) if len(self._recent_urgencies) >= 3 else 0.5
+        urgency_variance   = float(np.std(list(self._recent_urgencies))) if len(self._recent_urgencies) >= 3 else 0.0
         self._steps_since_action = (
             0 if action != "do-nothing" else self._steps_since_action + 1
         )
         
         # Step 7.5 — Estimate RUL
-        rul_minutes = self._estimate_rul(temp_celsius, lstm_pred_celsius, self.profile["safe_max"])
+        rul_minutes = self._estimate_rul(temp_celsius_val, lstm_pred_celsius, self.profile["safe_max"])
 
         # Create Result object first
         result = MHARSResult(
             timestamp       = time.time(),
             machine_type    = self.machine_name,
-            current_temp    = temp_celsius,
+            current_temp    = temp_celsius_val,
             anomaly_score   = ae_score,
             lstm_prediction = lstm_pred_celsius,
             context_score   = context,
@@ -309,18 +371,29 @@ class MHARS:
                 "cnn_score": cnn_score, "audio_score": audio_score,
                 "context_score": context, "rul_minutes": rul_minutes,
                 "contributions": contributions, "top_contributor": top_contributor,
-                "fault_type": fault_type
+                "fault_type": fault_type,
+                # Issue 1 — Multi-sensor context
+                "sensor_reading": {
+                    "temp_c": sr.temp_c, "load_pct": sr.load_pct,
+                    "ambient_c": sr.ambient_c, "dT_dt": sr.dT_dt,
+                    "humidity_pct": sr.humidity_pct, "vibration_g": sr.vibration_g,
+                },
+                # Issue 6 — Uncertainty quantification
+                "urgency_confidence": round(urgency_confidence, 3),
+                "urgency_variance": round(urgency_variance, 4),
             }
         )
 
         # Step 8 — LLM alert
         alert_ctx = {
             "machine_type":   self.machine_name,
-            "current_temp":   temp_celsius,
+            "current_temp":   temp_celsius_val,
             "predicted_temp": lstm_pred_celsius,
             "anomaly_score":  ae_score,
             "action_name":    action,
             "urgency":        urgency,
+            "load_pct":       sr.load_pct,
+            "dT_dt":          sr.dT_dt,
         }
         
         if route == "edge":
@@ -342,7 +415,7 @@ class MHARS:
                         print(f"\n  [ASYNC ALERT READY] {result.alert}")
                 self._llm_gen.generate_async(alert_ctx, callback=on_alert_ready)
         else:
-            result.alert = f"[{self.machine_name}] {temp_celsius:.1f}°C — action: {action}."
+            result.alert = f"[{self.machine_name}] {temp_celsius_val:.1f}°C — action: {action}."
             result.llm_source = "fallback"
 
         if self.verbose:
@@ -378,6 +451,26 @@ class MHARS:
         raw = self._if_model.decision_function(feat)[0]
         score = -raw
         return float(np.clip(score, 0, 1))
+
+    def _retrain_if(self):
+        """Issue 5 — Online Isolation Forest retraining from rolling buffer.
+        Adapts to seasonal/load-cycle drift by periodically refitting
+        on the most recent observations."""
+        try:
+            from sklearn.ensemble import IsolationForest
+            X = np.array(list(self._if_retrain_buffer))
+            new_model = IsolationForest(
+                contamination=Config.IF_CONTAMINATION,
+                n_estimators=100,
+                random_state=Config.SEED,
+            )
+            new_model.fit(X)
+            self._if_model = new_model
+            if self.verbose:
+                print(f"  [IF] Online retrained on {len(X)} samples")
+        except Exception as e:
+            if self.verbose:
+                print(f"  [IF] Retrain failed: {e}")
 
     def _compute_lstm_score(self, temp_norm: float):
         window = list(self._temp_window)
