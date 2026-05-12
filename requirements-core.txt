@@ -26,8 +26,15 @@ torchvision>=0.15.0
 matplotlib>=3.7.0
 pillow>=9.5.0
 
+# Audio processing (for MFCC pipeline)
+librosa>=0.10.0
+soundfile>=0.12.0
+
 # LLM (optional — falls back to templates if not installed)
 # llama-cpp-python>=0.2.0
 
 # System monitoring
 psutil>=5.9.0
+
+# Testing
+pytest>=7.0.0
