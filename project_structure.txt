@@ -1,0 +1,124 @@
+.
+├── api
+│   └── main.py
+├── benchmarks
+│   ├── __init__.py
+│   ├── benchmark_runner.py
+│   ├── llm_quality_eval.py
+│   ├── paper_figures.py
+│   └── run_latency_test.py
+├── dashboard
+│   ├── AGENTS.md
+│   ├── CLAUDE.md
+│   ├── eslint.config.mjs
+│   ├── next-env.d.ts
+│   ├── next.config.ts
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── postcss.config.mjs
+│   ├── public
+│   │   ├── file.svg
+│   │   ├── globe.svg
+│   │   ├── next.svg
+│   │   ├── vercel.svg
+│   │   └── window.svg
+│   ├── README.md
+│   ├── src
+│   │   ├── app
+│   │   └── components
+│   └── tsconfig.json
+├── dashboard_web.html
+├── data
+│   └── train_FD001.txt
+├── demo.py
+├── mhars
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── config.py
+│   ├── core.py
+│   ├── dashboard.py
+│   ├── llm.py
+│   ├── models.py
+│   ├── system_health.py
+│   └── trainer.py
+├── models
+│   ├── audio_model_meta.json
+│   ├── audio_model.pt
+│   ├── autoencoder_meta.json
+│   ├── autoencoder.pt
+│   ├── isolation_forest.pkl
+│   ├── lstm_adapted_engine.pt
+│   ├── lstm.pt
+│   ├── models_README.md
+│   ├── Phi-3-mini-4k-instruct-q4.gguf
+│   ├── ppo_adapted_engine.zip
+│   ├── ppo_thermal.zip
+│   ├── vibration_detector_meta.json
+│   └── vibration_detector.pt
+├── project_structure.txt
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+├── results
+│   ├── ae_training.csv
+│   ├── figures
+│   │   ├── fig1_latency.pdf
+│   │   ├── fig1_latency.png
+│   │   ├── fig2_lstm_convergence.pdf
+│   │   ├── fig2_lstm_convergence.png
+│   │   ├── fig3_autoencoder_loss.pdf
+│   │   ├── fig3_autoencoder_loss.png
+│   │   ├── fig4_ppo_reward.pdf
+│   │   ├── fig4_ppo_reward.png
+│   │   ├── fig5_adapter_lstm.pdf
+│   │   ├── fig5_adapter_lstm.png
+│   │   ├── fig6_adapter_ppo.pdf
+│   │   └── fig6_adapter_ppo.png
+│   ├── latency_benchmark.md
+│   ├── llm_quality_report.md
+│   ├── lstm_training.csv
+│   ├── ppo_training_curve.png
+│   ├── ppo_training.csv
+│   ├── stage5_results.json
+│   └── thermal_trends.png
+├── stage1_simulation
+│   ├── __init__.py
+│   ├── gym_env.py
+│   ├── load_cmapss.py
+│   └── run_stage1.py
+├── stage2_ml
+│   ├── __init__.py
+│   ├── attention_fusion.py
+│   ├── audio_mfcc.py
+│   ├── audio_model.py
+│   ├── autoencoder.py
+│   ├── isolation_forest.py
+│   ├── lstm_predictor.py
+│   ├── mobilenet_cnn.py
+│   ├── run_stage2.py
+│   └── vibration_model.py
+├── stage3_ai
+│   ├── __init__.py
+│   ├── llm_output.py
+│   ├── ppo_agent.py
+│   ├── rl_router.py
+│   └── run_stage3.py
+├── stage4_hardware
+│   ├── __init__.py
+│   ├── edge_inference.py
+│   ├── mqtt_publisher.py
+│   ├── mqtt_subscriber.py
+│   └── run_stage4.py
+├── stage5_adapter
+│   ├── __init__.py
+│   ├── machine_adapter.py
+│   └── run_stage5.py
+├── test_health.py
+├── test_pipeline.py
+├── test_server.py
+├── test_ws.py
+└── tests
+    ├── __init__.py
+    └── test_all.py
+
+19 directories, 103 files

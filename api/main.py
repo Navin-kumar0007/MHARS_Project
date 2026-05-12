@@ -35,8 +35,10 @@ except ImportError:
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from mhars.core import MHARS
+from mhars.system_health import SystemHealthMonitor
 from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
 
 # ── App Setup ──────────────────────────────────────────────────────────────────
@@ -316,6 +318,12 @@ async def get_mode():
     return {"mode": "live" if state.live_mode else "demo", "live_mode": state.live_mode}
 
 
+@app.get("/api/system_health")
+async def get_system_health():
+    """Return hardware metrics based on the current machine."""
+    return SystemHealthMonitor.snapshot(state.machine_type_id)
+
+
 # ── WebSocket Telemetry Stream ─────────────────────────────────────────────────
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket):
@@ -338,7 +346,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 current_temp = state.env.temp
 
             # ── Step 2: Run the complete MHARS AI pipeline ─────────────────
-            result = state.mhars.run(current_temp, sync_alert=True)
+            # Run in threadpool to prevent blocking the WebSocket event loop during heavy ML inferences
+            result = await run_in_threadpool(state.mhars.run, temp_celsius=current_temp, sync_alert=True)
 
             # ── Step 3: Apply PPO action feedback to the simulation ────────
             action_effects = {
@@ -396,6 +405,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # Mode indicator
                 "live_mode": state.live_mode,
+                
+                # Full system health (dynamic for all modes)
+                "system_health": SystemHealthMonitor.snapshot(state.machine_type_id),
 
                 # Machine thresholds (for gauge rendering)
                 "thresholds": {
@@ -403,6 +415,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     "safe_max": MACHINE_PROFILES[state.machine_type_id].get("safe_max", 80.0),
                     "critical": MACHINE_PROFILES[state.machine_type_id].get("critical", 95.0),
                 },
+                
+                # Full metadata dictionary (contains RUL, XAI contributions, fault_type)
+                "metadata": meta,
             }
 
             # ── Step 5: Store in history buffers ───────────────────────────
