@@ -38,7 +38,7 @@ jobs:
           pip install -e .
 
       - name: Run test suite
-        run: python -m pytest tests/test_all.py -v --tb=short
+        run: python -m pytest tests/ -v --tb=short
 
       - name: Run pipeline smoke test
         run: python test_pipeline.py || true

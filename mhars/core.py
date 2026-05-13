@@ -13,7 +13,7 @@ Usage:
     print(result.action)
 """
 
-import os, sys, json, time, pickle
+import os, sys, json, time, pickle, logging
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Union
@@ -108,19 +108,44 @@ class MHARS:
         self._recent_urgencies: deque = deque(maxlen=30)
         self._recent_contexts: deque  = deque(maxlen=30)
 
+        # Issue 5 — Structured logging
+        self._setup_logger()
+
+        # Issue 8 — Register node in multi-agent registry
+        from mhars.registry import AgentRegistry
+        self._registry = AgentRegistry()
+        self.node_id = f"{self.machine_name}_{os.getpid()}"
+        self._registry.register_node(self.node_id, self.machine_name)
+
         print(f"[MHARS] Initialising for machine: {self.machine_name}")
         self._load_models(llm_path)
         print(f"[MHARS] Ready ✓\n")
 
+    def _setup_logger(self):
+        log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, 'mhars_events.jsonl')
+        
+        self.logger = logging.getLogger('mhars_structured')
+        self.logger.setLevel(logging.INFO)
+        # Prevent duplicate handlers if re-instantiated
+        if not self.logger.handlers:
+            handler = logging.FileHandler(log_file)
+            handler.setFormatter(logging.Formatter('%(message)s'))
+            self.logger.addHandler(handler)
+
     # ── Model loading ──────────────────────────────────────────────────────────
     def _load_models(self, llm_path: Optional[str]):
         """Load all trained models. Gracefully handles missing files."""
+        from mhars.metadata_manager import MetadataManager
+        metadata = MetadataManager(max_age_days=30)
 
         # Isolation Forest
         self._if_model = None
         if os.path.exists(Config.ISOLATION_FOREST):
             with open(Config.ISOLATION_FOREST, 'rb') as f:
                 self._if_model = pickle.load(f)
+            metadata.check_model_freshness(Config.ISOLATION_FOREST, "Isolation Forest")
             print(f"  ✓  Isolation Forest loaded")
         else:
             print(f"  ⚠  Isolation Forest not found — skipping noise filter")
@@ -135,6 +160,7 @@ class MHARS:
             self._lstm = ThermalLSTM(hidden_size=hidden_size)
             self._lstm.load_state_dict(checkpoint)
             self._lstm.eval()
+            metadata.check_model_freshness(Config.LSTM, "Thermal LSTM")
             print(f"  ✓  LSTM loaded (hidden_size={hidden_size})")
         else:
             print(f"  ⚠  LSTM not found — using linear trend prediction")
@@ -152,6 +178,7 @@ class MHARS:
                 with open(Config.AUTOENCODER_META) as f:
                     meta = json.load(f)
                 self._ae_threshold = meta.get("threshold", 0.05)
+            metadata.check_model_freshness(Config.AUTOENCODER, "Thermal Autoencoder")
             print(f"  ✓  Autoencoder loaded (threshold={self._ae_threshold:.5f})")
         else:
             print(f"  ⚠  Autoencoder not found — using simple anomaly score")
@@ -175,6 +202,7 @@ class MHARS:
                 self._vib_mean      = np.array(vib_meta["mean"],  dtype=np.float32)
                 self._vib_std       = np.array(vib_meta["std"],   dtype=np.float32)
                 self._vib_threshold = vib_meta.get("threshold", 0.01)
+                metadata.check_model_freshness(Config.VIBRATION_DETECTOR, "Vibration Detector")
                 print(f"  ✓  Vibration Detector loaded (features={n_feat})")
             else:
                 print(f"  ⚠  Vibration meta not found — skipping")
@@ -297,20 +325,26 @@ class MHARS:
         ae_score = self._compute_ae_score()
 
         # Step 4b — Vibration anomaly score
-        vib_score = self._compute_vib_score(temp_norm)
+        if sr.vibration_g > 0.0:
+            # Map real vibration to score (e.g. >10g is critical)
+            vib_score = float(np.clip(sr.vibration_g / 10.0, 0, 1))
+        else:
+            vib_score = self._compute_vib_score(temp_norm)
 
         # Step 4c — Multi-modal inputs (CNN and Audio)
         cnn_score   = extra.get("cnn_score", 0.5)
         cnn_var     = extra.get("cnn_var", None)
-        audio_score = extra.get("audio_score", 0.5)
-        audio_var   = extra.get("audio_var", None)
+        
+        # Priority: SensorReading > extra kwargs > simulation fallback
+        audio_score = sr.audio_score if sr.audio_score is not None else extra.get("audio_score", 0.5)
+        audio_var   = sr.audio_var if sr.audio_var is not None else extra.get("audio_var", None)
 
         if self._cnn is not None and "cnn_score" not in extra:
             cnn_res = self._cnn.predict_from_temperature(temp_celsius_val, self.profile["safe_max"])
             cnn_score = cnn_res["hotspot_score"]
             cnn_var   = cnn_res["grid_variance"]
             
-        if self._audio is not None and "audio_score" not in extra:
+        if self._audio is not None and sr.audio_score is None and "audio_score" not in extra:
             aud_res = self._audio.process_from_temperature(temp_celsius_val, self.profile["safe_max"])
             audio_score = aud_res["audio_score"]
             audio_var   = aud_res["audio_variance"]
@@ -372,17 +406,12 @@ class MHARS:
                 "context_score": context, "rul_minutes": rul_minutes,
                 "contributions": contributions, "top_contributor": top_contributor,
                 "fault_type": fault_type,
-                # Issue 1 — Multi-sensor context
-                "sensor_reading": {
-                    "temp_c": sr.temp_c, "load_pct": sr.load_pct,
-                    "ambient_c": sr.ambient_c, "dT_dt": sr.dT_dt,
-                    "humidity_pct": sr.humidity_pct, "vibration_g": sr.vibration_g,
-                },
-                # Issue 6 — Uncertainty quantification
+                "features": sr.to_feature_vector(),
                 "urgency_confidence": round(urgency_confidence, 3),
-                "urgency_variance": round(urgency_variance, 4),
+                "urgency_variance":   round(urgency_variance, 4),
             }
         )
+
 
         # Step 8 — LLM alert
         alert_ctx = {
@@ -397,7 +426,7 @@ class MHARS:
         }
         
         if route == "edge":
-            result.alert = (f"[EDGE ALERT] {self.machine_name} at {temp_celsius:.1f}°C! "
+            result.alert = (f"[EDGE ALERT] {self.machine_name} at {temp_celsius_val:.1f}°C! "
                             f"Urgent action triggered: {action}.")
             result.llm_source = "edge_template"
         elif self._llm_gen is not None:
@@ -417,6 +446,14 @@ class MHARS:
         else:
             result.alert = f"[{self.machine_name}] {temp_celsius_val:.1f}°C — action: {action}."
             result.llm_source = "fallback"
+
+        # Write structured log
+        import dataclasses
+        log_entry = dataclasses.asdict(result)
+        self.logger.info(json.dumps(log_entry))
+
+        # Update heartbeat
+        self._registry.register_node(self.node_id, self.machine_name, status=result.action)
 
         if self.verbose:
             print(result.summary())

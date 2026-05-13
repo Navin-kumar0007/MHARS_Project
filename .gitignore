@@ -55,6 +55,8 @@ htmlcov/
 
 # ── Logs ─────────────────────────────────────────────────────
 *.log
+logs/
+*.jsonl
 tensorboard_logs/
 
 # ── llama.cpp build artifacts ─────────────────────────────────

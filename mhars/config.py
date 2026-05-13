@@ -22,29 +22,31 @@ class Config:
     VIBRATION_DETECTOR   = os.path.join(MODELS_DIR, 'vibration_detector.pt')
     VIBRATION_META       = os.path.join(MODELS_DIR, 'vibration_detector_meta.json')
 
+    import json
+    
     # ── Machine types ─────────────────────────────────────────────────────────
-    MACHINE_TYPES = {
-        0: "CPU",
-        1: "Motor",
-        2: "Server",
-        3: "Engine",
-    }
-
-    MACHINE_PROFILES = {
-        # Issue 2 — RC thermal circuit model parameters per machine type:
-        #   thermal_mass_J_K  = thermal capacitance (Joules per Kelvin)
-        #   conv_coeff        = convective heat transfer coefficient (W/K)
-        #   target_temp       = ideal operating temperature for tracking reward
-        #   heat_rate         = max heat generation rate (°C/step)
-        0: {"name": "CPU",    "safe_max": 85.0,  "critical": 100.0, "idle": 45.0,
-            "thermal_mass_J_K": 12.0, "conv_coeff": 0.08, "target_temp": 65.0, "heat_rate": 2.5},
-        1: {"name": "Motor",  "safe_max": 80.0,  "critical": 95.0,  "idle": 40.0,
-            "thermal_mass_J_K": 25.0, "conv_coeff": 0.05, "target_temp": 60.0, "heat_rate": 1.8},
-        2: {"name": "Server", "safe_max": 75.0,  "critical": 90.0,  "idle": 35.0,
-            "thermal_mass_J_K": 18.0, "conv_coeff": 0.07, "target_temp": 55.0, "heat_rate": 1.5},
-        3: {"name": "Engine", "safe_max": 100.0, "critical": 115.0, "idle": 60.0,
-            "thermal_mass_J_K": 40.0, "conv_coeff": 0.03, "target_temp": 80.0, "heat_rate": 3.8},
-    }
+    # Dynamically load from JSON file to allow operators to add profiles
+    # without touching source code.
+    _machines_file = os.path.join(os.path.dirname(__file__), 'machines.json')
+    MACHINE_PROFILES = {}
+    MACHINE_TYPES = {}
+    
+    if os.path.exists(_machines_file):
+        with open(_machines_file, 'r') as f:
+            _raw_profiles = json.load(f)
+            for k, v in _raw_profiles.items():
+                machine_id = int(k)
+                MACHINE_PROFILES[machine_id] = v
+                MACHINE_TYPES[machine_id] = v["name"]
+    else:
+        # Fallback if file goes missing
+        MACHINE_TYPES = { 0: "CPU", 1: "Motor", 2: "Server", 3: "Engine" }
+        MACHINE_PROFILES = {
+            0: {"name": "CPU", "safe_max": 85.0, "critical": 100.0, "idle": 45.0, "thermal_mass_J_K": 12.0, "conv_coeff": 0.08, "target_temp": 65.0, "heat_rate": 2.5},
+            1: {"name": "Motor", "safe_max": 80.0, "critical": 95.0, "idle": 40.0, "thermal_mass_J_K": 25.0, "conv_coeff": 0.05, "target_temp": 60.0, "heat_rate": 1.8},
+            2: {"name": "Server", "safe_max": 75.0, "critical": 90.0, "idle": 35.0, "thermal_mass_J_K": 18.0, "conv_coeff": 0.07, "target_temp": 55.0, "heat_rate": 1.5},
+            3: {"name": "Engine", "safe_max": 100.0, "critical": 115.0, "idle": 60.0, "thermal_mass_J_K": 40.0, "conv_coeff": 0.03, "target_temp": 80.0, "heat_rate": 3.8},
+        }
 
     # ── RL Router thresholds ──────────────────────────────────────────────────
     EDGE_URGENCY_THRESHOLD  = 0.8   # above → edge only  (< 50 ms)

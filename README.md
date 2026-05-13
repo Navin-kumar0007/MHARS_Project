@@ -211,6 +211,16 @@ MHARS_Project/
 
 ---
 
+## Security & Privacy Considerations
+
+When deploying MHARS in a real factory or edge environment, several security and privacy factors must be addressed:
+
+1. **Edge vs. Cloud Processing**: MHARS supports a local execution model (`MHARSResult.route == "edge"`). Critical sensor data and vision/audio streams do not need to be transmitted to the cloud, preserving industrial trade secrets.
+2. **Data in Transit**: If the REST/WebSocket API is exposed over a network, ensure it is wrapped in TLS (HTTPS/WSS) using a reverse proxy like Nginx or Traefik.
+3. **API Authentication**: The FastAPI backend includes `X-API-Key` header authentication. Do not disable this in production (`MHARS_API_KEY` environment variable).
+4. **LLM Data Sanitization**: The Phi-3 Mini agent is designed to run entirely offline on-device via `llama.cpp`. No proprietary machine IDs or schematics are sent to third-party APIs (e.g., OpenAI) unless manually configured to do so.
+5. **Data Retention**: The telemetry database (`logs/mhars_events.jsonl`) should be rotated and securely archived according to your organization's data retention policies.
+
 ## Datasets
 
 **NASA CMAPSS** — turbofan engine degradation (primary training data)

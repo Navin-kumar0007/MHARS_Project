@@ -38,7 +38,9 @@ class SensorReading:
     ambient_c:     float = 25.0
     dT_dt:         Optional[float] = None   # None = auto-compute from history
     humidity_pct:  float = 50.0
-    vibration_g:   float = 0.0
+    vibration_g:   float = 0.0              # 0.0 = use thermal proxy, >0 = use real sensor
+    audio_score:   Optional[float] = None   # None = use thermal proxy, 0-1 = use real sensor
+    audio_var:     Optional[float] = None
 
     def to_feature_vector(self) -> list:
         """Return the feature vector for ML models (dT_dt must be set)."""

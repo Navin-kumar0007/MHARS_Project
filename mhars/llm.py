@@ -46,9 +46,15 @@ class AlertGenerator:
             print("        Download Phi-3-mini-4k-instruct-q4.gguf from")
             print("        huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf")
 
-        self._queue = queue.Queue()
-        self._worker_thread = threading.Thread(target=self._worker, daemon=True)
-        self._worker_thread.start()
+        self._queue = queue.Queue(maxsize=10)
+        self._worker_thread = None
+        self._start_worker()
+
+    def _start_worker(self):
+        """Start or restart the background LLM worker thread."""
+        if self._worker_thread is None or not self._worker_thread.is_alive():
+            self._worker_thread = threading.Thread(target=self._worker, daemon=True)
+            self._worker_thread.start()
 
     def _worker(self):
         while True:
@@ -66,7 +72,18 @@ class AlertGenerator:
 
     def generate_async(self, context: dict, callback=None):
         """Queue the alert generation for background processing."""
-        self._queue.put((context, callback))
+        # Heartbeat: Ensure thread is alive
+        self._start_worker()
+
+        try:
+            # Block=False to handle backpressure instantly
+            self._queue.put((context, callback), block=False)
+        except queue.Full:
+            print("[LLM Warning] Queue full! Falling back to template alert instantly.")
+            context['_force_template'] = True
+            res = self.generate(context)
+            if callback:
+                callback(res)
 
     def wait_for_alerts(self):
         """Block until all async alerts have been generated and processed."""
