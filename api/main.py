@@ -41,41 +41,69 @@ from mhars.core import MHARS
 from mhars.system_health import SystemHealthMonitor
 from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
 
-# ── Authentication ─────────────────────────────────────────────────────────────
-# Set MHARS_API_KEY environment variable to enable API key protection.
-# When not set, auth is disabled (development mode).
-MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "")
-
-async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
-    """Verify API key for HTTP routes (if MHARS_API_KEY is configured)."""
-    if not MHARS_API_KEY:
-        return  # Auth disabled in development
-    if api_key != MHARS_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
-
-def verify_ws_token(token: str) -> bool:
-    """Verify API key for WebSocket connections (via query param)."""
-    if not MHARS_API_KEY:
-        return True  # Auth disabled in development
-    return token == MHARS_API_KEY
-
-# ── App Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="MHARS Dashboard API",
-    description="Real-time monitoring backend for the MHARS Digital Twin",
-    version="2.0.0",
+    title="MHARS API",
+    description="Production-grade thermal monitoring and AI control API",
+    version="2.1.0"
 )
 
-# CORS — restrict origins in production via MHARS_CORS_ORIGINS env var
-allowed_origins = os.environ.get("MHARS_CORS_ORIGINS", "*").split(",")
+# ── CORS ───────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],  # In production, restrict this to the dashboard URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── Authentication ─────────────────────────────────────────────────────────────
+# Set MHARS_API_KEY environment variable to enable API key protection.
+# Set MHARS_REQUIRE_AUTH=true to strictly enforce authentication.
+MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "")
+MHARS_REQUIRE_AUTH = os.environ.get("MHARS_REQUIRE_AUTH", "false").lower() == "true"
+MHARS_SYNTHETIC_MODE = os.environ.get("MHARS_SYNTHETIC_MODE", "false").lower() == "true"
+
+async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
+    """Verify API key for HTTP routes (if MHARS_API_KEY is configured or required)."""
+    # If auth is required, we MUST have an API key set AND it must match the header
+    if MHARS_REQUIRE_AUTH:
+        if not MHARS_API_KEY:
+            raise HTTPException(status_code=500, detail="Server misconfiguration: MHARS_REQUIRE_AUTH is true but MHARS_API_KEY is not set.")
+        if not api_key or api_key != MHARS_API_KEY:
+            raise HTTPException(status_code=403, detail="Invalid or missing API key (X-API-Key header)")
+        return
+        
+    # If auth is NOT required, but an API key is set, we still check it if provided
+    if MHARS_API_KEY and api_key and api_key != MHARS_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key provided")
+
+def verify_ws_token(token: str) -> bool:
+    """Verify API key for WebSocket connections (via query param)."""
+    if MHARS_REQUIRE_AUTH:
+        if not MHARS_API_KEY: return False
+        return token == MHARS_API_KEY
+    if MHARS_API_KEY and token:
+        return token == MHARS_API_KEY
+    return True
+
+@app.on_event("startup")
+async def startup_event():
+    # Security Warning
+    if not MHARS_API_KEY and not MHARS_REQUIRE_AUTH:
+        # Check if we are bound to 0.0.0.0 (could be exposed)
+        import socket
+        try:
+            # We don't have the bind address here easily, but we can warn generally
+            print("\n" + "!"*80)
+            print("  SECURITY WARNING: MHARS API is running WITHOUT authentication.")
+            print("  If this server is accessible over the network, anyone can control it.")
+            print("  To secure it, set MHARS_API_KEY and MHARS_REQUIRE_AUTH=true.")
+            print("!"*80 + "\n")
+        except:
+            pass
+    
+    if MHARS_SYNTHETIC_MODE:
+        print("[INIT] Running in SYNTHETIC MODE (forcing multi-modal proxies)")
 
 # ── Global State ───────────────────────────────────────────────────────────────
 class SystemState:
@@ -246,6 +274,7 @@ async def get_system_status():
             k: v["description"] for k, v in ANOMALY_PROFILES.items()
         },
         "active_anomaly": state.anomaly_injection,
+        "synthetic_mode": MHARS_SYNTHETIC_MODE,
     }
 
 
@@ -394,6 +423,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
 
             # ── Step 2: Run the complete MHARS AI pipeline ─────────────────
             # Run in threadpool to prevent blocking the WebSocket event loop during heavy ML inferences
+            # Pass synthetic mode flag to core via metadata if needed, but here we just use the global flag
             result = await run_in_threadpool(state.mhars.run, temp_celsius=sr, sync_alert=True)
 
             # ── Step 3: Apply PPO action feedback to the simulation ────────

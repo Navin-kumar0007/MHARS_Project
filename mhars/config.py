@@ -32,14 +32,21 @@ class Config:
     MACHINE_TYPES = {}
     
     if os.path.exists(_machines_file):
-        with open(_machines_file, 'r') as f:
-            _raw_profiles = json.load(f)
-            for k, v in _raw_profiles.items():
-                machine_id = int(k)
-                MACHINE_PROFILES[machine_id] = v
-                MACHINE_TYPES[machine_id] = v["name"]
-    else:
-        # Fallback if file goes missing
+        try:
+            with open(_machines_file, 'r') as f:
+                _raw_profiles = json.load(f)
+                if _raw_profiles:
+                    for k, v in _raw_profiles.items():
+                        machine_id = int(k)
+                        MACHINE_PROFILES[machine_id] = v
+                        MACHINE_TYPES[machine_id] = v["name"]
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            # Issue 1 — Malformed config fallback
+            print(f"  [ERROR] Malformed or invalid machines.json: {e}. Falling back to defaults.")
+            _raw_profiles = None # Force fallback below
+    
+    if not MACHINE_PROFILES:
+        # Fallback if file goes missing or was malformed
         MACHINE_TYPES = { 0: "CPU", 1: "Motor", 2: "Server", 3: "Engine" }
         MACHINE_PROFILES = {
             0: {"name": "CPU", "safe_max": 85.0, "critical": 100.0, "idle": 45.0, "thermal_mass_J_K": 12.0, "conv_coeff": 0.08, "target_temp": 65.0, "heat_rate": 2.5},

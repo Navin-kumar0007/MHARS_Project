@@ -9,6 +9,16 @@ Requires Stage 2 and Stage 3 models to be trained first.
 """
 
 import os, sys
+import argparse
+
+# Parse arguments
+parser = argparse.ArgumentParser()
+parser.add_argument("--synthetic", action="store_true", help="Enable synthetic mode")
+args = parser.parse_args()
+
+if args.synthetic:
+    os.environ["MHARS_SYNTHETIC_MODE"] = "true"
+    print("Running in SYNTHETIC mode...")
 
 from mhars import MHARS, Dashboard, Config
 

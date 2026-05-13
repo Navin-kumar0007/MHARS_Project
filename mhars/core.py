@@ -144,8 +144,11 @@ class MHARS:
             queue_handler = logging.handlers.QueueHandler(self._log_queue)
             self.logger.addHandler(queue_handler)
             
-            # 3. Create the actual FileHandler (runs in background)
-            file_handler = logging.FileHandler(log_file)
+            # 3. Create the RotatingFileHandler (runs in background)
+            # Max 10MB per file, keep 5 backups
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file, maxBytes=10*1024*1024, backupCount=5
+            )
             file_handler.setFormatter(logging.Formatter('%(message)s'))
             
             # 4. Create and start the listener
@@ -157,7 +160,8 @@ class MHARS:
     def _load_models(self, llm_path: Optional[str]):
         """Load all trained models. Gracefully handles missing files."""
         from mhars.metadata_manager import MetadataManager
-        metadata = MetadataManager(max_age_days=30)
+        # Pass logger to MetadataManager for structured stale-model events
+        metadata = MetadataManager(max_age_days=30, logger=self.logger)
 
         # Isolation Forest
         self._if_model = None

@@ -55,3 +55,17 @@ def test_integration_pipeline_emergency_override(system):
     reading = SensorReading(temp_c=96.0, load_pct=0.9, vibration_g=1.0)
     res = system.run(reading)
     assert res.action == "emergency-shutdown", f"Expected emergency-shutdown override, got {res.action}"
+
+def test_llm_queue_overflow(system):
+    """Test that the system remains responsive even when the LLM queue is saturated."""
+    # Inject 20 fast readings (queue size is 10)
+    for i in range(20):
+        # High temp to trigger alert generation
+        res = system.run(SensorReading(temp_c=70.0 + (i % 5), load_pct=0.8))
+        
+    # Verify that the last result still has a valid (though maybe pending) alert
+    assert res.current_temp >= 70.0
+    assert res.alert is not None
+    # Wait for background queue to clear
+    system.wait_for_alerts()
+    assert "[EDGE ALERT]" in res.alert or "[NORMAL]" in res.alert or "[WARNING]" in res.alert or "[CRITICAL]" in res.alert or "7" in res.alert

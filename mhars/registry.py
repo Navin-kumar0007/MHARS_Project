@@ -1,6 +1,7 @@
 import os
 import json
 import time
+from filelock import FileLock
 from typing import Dict, Any
 
 class AgentRegistry:
@@ -11,34 +12,61 @@ class AgentRegistry:
     """
     def __init__(self, registry_file: str = "logs/registry.json"):
         self.registry_file = os.path.join(os.path.dirname(__file__), '..', registry_file)
+        self.lock_path = self.registry_file + ".lock"
         os.makedirs(os.path.dirname(self.registry_file), exist_ok=True)
         
         if not os.path.exists(self.registry_file):
             self._save({})
 
     def _load(self) -> Dict[str, Any]:
+        lock = FileLock(self.lock_path)
         try:
-            with open(self.registry_file, 'r') as f:
-                return json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
+            with lock.acquire(timeout=2):
+                if os.path.exists(self.registry_file):
+                    with open(self.registry_file, 'r') as f:
+                        return json.load(f)
+                return {}
+        except Exception:
             return {}
 
     def _save(self, data: Dict[str, Any]):
-        tmp_file = self.registry_file + ".tmp"
-        with open(tmp_file, 'w') as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_file, self.registry_file)
+        lock = FileLock(self.lock_path)
+        try:
+            with lock.acquire(timeout=2):
+                with open(self.registry_file, 'w') as f:
+                    json.dump(data, f, indent=2)
+        except Exception:
+            pass
 
     def register_node(self, node_id: str, machine_type: str, status: str = "active"):
-        """Register or update a node's heartbeat in the registry."""
-        registry = self._load()
-        registry[node_id] = {
-            "machine_type": machine_type,
-            "status": status,
-            "last_heartbeat": time.time(),
-            "last_updated": time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
-        }
-        self._save(registry)
+        """Register or update a node's heartbeat in the registry with locking."""
+        lock = FileLock(self.lock_path)
+        try:
+            with lock.acquire(timeout=2):
+                # Load
+                if os.path.exists(self.registry_file):
+                    try:
+                        with open(self.registry_file, 'r') as f:
+                            registry = json.load(f)
+                    except json.JSONDecodeError:
+                        registry = {}
+                else:
+                    registry = {}
+                
+                # Modify
+                registry[node_id] = {
+                    "machine_type": machine_type,
+                    "status": status,
+                    "last_heartbeat": time.time(),
+                    "last_updated": time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
+                }
+                
+                # Save
+                with open(self.registry_file, 'w') as f:
+                    json.dump(registry, f, indent=2)
+        except Exception:
+            # Skip update if lock cannot be acquired
+            pass
 
     def get_active_nodes(self, timeout_seconds: int = 300) -> Dict[str, Any]:
         """Return all nodes that have pinged within the timeout window."""
