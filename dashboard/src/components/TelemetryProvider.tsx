@@ -29,6 +29,7 @@ export type Telemetry = {
     safe_max: number;
     critical: number;
   };
+  metadata: any;
 };
 
 export type SystemStatus = {
@@ -52,20 +53,22 @@ type TelemetryContextType = {
   history: Telemetry[];
   isConnected: boolean;
   systemStatus: SystemStatus | null;
+  registry: Record<string, any>;
   injectAnomaly: (type: string) => Promise<void>;
   switchMachine: (id: number) => Promise<void>;
   resetSystem: () => Promise<void>;
   refreshStatus: () => Promise<void>;
 };
 
-const API_BASE = "http://localhost:8050";
-const WS_URL = "ws://localhost:8050/ws/telemetry";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/telemetry";
 
 const TelemetryContext = createContext<TelemetryContextType>({
   latest: null,
   history: [],
   isConnected: false,
   systemStatus: null,
+  registry: {},
   injectAnomaly: async () => {},
   switchMachine: async () => {},
   resetSystem: async () => {},
@@ -80,6 +83,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
   const [history, setHistory] = useState<Telemetry[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [registry, setRegistry] = useState<Record<string, any>>({});
   const wsRef = useRef<WebSocket | null>(null);
 
   // Fetch system status
@@ -93,9 +97,23 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Connect WebSocket
+  // Fetch registry
+  const refreshRegistry = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/registry`);
+      const data = await res.json();
+      setRegistry(data);
+    } catch (err) {
+      console.error("Failed to fetch registry", err);
+    }
+  }, []);
+
+  // Connect WebSocket & Polling
   useEffect(() => {
     refreshStatus();
+    refreshRegistry();
+
+    const registryInterval = setInterval(refreshRegistry, 5000);
 
     const connect = () => {
       const ws = new WebSocket(WS_URL);
@@ -132,12 +150,13 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
     connect();
 
     return () => {
+      clearInterval(registryInterval);
       if (wsRef.current) {
         wsRef.current.onclose = null; // Prevent reconnect on unmount
         wsRef.current.close();
       }
     };
-  }, [refreshStatus]);
+  }, [refreshStatus, refreshRegistry]);
 
   // Actions
   const injectAnomaly = useCallback(async (type: string) => {
@@ -222,6 +241,7 @@ export function TelemetryProvider({ children }: { children: React.ReactNode }) {
         history,
         isConnected,
         systemStatus,
+        registry,
         injectAnomaly,
         switchMachine,
         resetSystem,

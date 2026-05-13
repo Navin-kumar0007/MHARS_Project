@@ -344,6 +344,12 @@ async def get_system_health():
     return SystemHealthMonitor.snapshot(state.machine_type_id)
 
 
+@app.get("/api/registry")
+async def get_registry():
+    """Return the list of all registered nodes in the federated network."""
+    return state.mhars._registry.list_all_nodes()
+
+
 # ── WebSocket Telemetry Stream ─────────────────────────────────────────────────
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(default="")):

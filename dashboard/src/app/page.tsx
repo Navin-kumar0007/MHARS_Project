@@ -27,6 +27,7 @@ import {
   Radio,
   BatteryWarning,
   RotateCcw,
+  Network,
 } from "lucide-react";
 
 // ── Helper: format time label ─────────────────────────────────────────────────
@@ -222,6 +223,14 @@ export default function DashboardPage() {
             <ShieldAlert className="w-4 h-4 text-rose-400" />
             <span className="text-sm font-medium text-rose-400">
               Active: {latest.active_anomaly.replace("_", " ")} ({latest.anomaly_ticks_remaining}s)
+            </span>
+          </div>
+        )}
+        {latest?.metadata?.concept_drift_detected && (
+          <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-4 py-2 rounded-full animate-bounce">
+            <Radio className="w-4 h-4 text-amber-400" />
+            <span className="text-sm font-medium text-amber-400">
+              Concept Drift Detected
             </span>
           </div>
         )}
@@ -501,6 +510,38 @@ export default function DashboardPage() {
               Reset System
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* Fleet Registry (Federated Network) */}
+      <div className="relative z-10 bg-slate-900/40 backdrop-blur-md border border-slate-800/60 rounded-2xl p-5 shadow-xl mt-6">
+        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+          <Network className="w-4 h-4 text-indigo-400" /> Federated Fleet Registry
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Object.entries(useTelemetry().registry).map(([nodeId, data]: [string, any]) => (
+            <div key={nodeId} className="bg-slate-950/50 border border-slate-800/50 rounded-xl p-3 flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold text-slate-200">{nodeId}</div>
+                <div className="text-[10px] text-slate-500 uppercase">{data.machine_type}</div>
+              </div>
+              <div className="text-right">
+                <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  data.status === "active" || data.status === "do-nothing"
+                    ? "text-emerald-400 border-emerald-500/20 bg-emerald-500/10"
+                    : "text-rose-400 border-rose-500/20 bg-rose-500/10"
+                }`}>
+                  {data.status}
+                </div>
+                <div className="text-[9px] text-slate-600 mt-1">{data.last_updated}</div>
+              </div>
+            </div>
+          ))}
+          {Object.keys(useTelemetry().registry).length === 0 && (
+            <div className="col-span-full py-8 text-center text-slate-600 text-sm italic">
+              No other active nodes detected in the local network.
+            </div>
+          )}
         </div>
       </div>
     </div>

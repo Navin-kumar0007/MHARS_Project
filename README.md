@@ -130,7 +130,12 @@ python demo.py
 ```bash
 # Terminal 1 — Backend API
 source venv/bin/activate
+
+# For local development (HTTP):
 uvicorn api.main:app --host 127.0.0.1 --port 8000
+
+# For production deployment (HTTPS/TLS):
+# uvicorn api.main:app --host 0.0.0.0 --port 443 --ssl-keyfile key.pem --ssl-certfile cert.pem
 
 # Terminal 2 — Open the static dashboard
 open dashboard_web.html     # macOS
@@ -233,8 +238,12 @@ Download `train_FD001.txt` and place it in `data/train_FD001.txt`.
 ```
 https://www.flir.com/oem/adas/adas-dataset-form/
 ```
+*(Alternatively, use the free open-source FLIR Starter dataset or similar thermal samples).*
 
-If datasets are not present, the code automatically uses a synthetic generator so all stages can be run immediately.
+### Reproducibility & Synthetic Multi-Modal Fallback
+
+If the CMAPSS or FLIR datasets are not present on your machine, **the system is still 100% operational**. 
+MHARS includes a built-in synthetic proxy generator that dynamically calculates highly realistic placeholder vibration features (via FFT simulacra) and audio metrics (MFCC-like variance) based on the rate-of-change of the CPU/Motor temperature. This ensures that any researcher can clone the repo, run `python demo.py`, and test the full 5-modality Attention Fusion pipeline out-of-the-box without waiting for large dataset downloads.
 
 ---
 

@@ -107,6 +107,9 @@ class MHARS:
         # Issue 6 — Uncertainty quantification: track recent score variance
         self._recent_urgencies: deque = deque(maxlen=30)
         self._recent_contexts: deque  = deque(maxlen=30)
+        
+        # New Feature — Data Drift Detection
+        self._ae_score_history: deque = deque(maxlen=100)
 
         # Issue 5 — Structured logging
         self._setup_logger()
@@ -122,17 +125,33 @@ class MHARS:
         print(f"[MHARS] Ready ✓\n")
 
     def _setup_logger(self):
+        import logging.handlers
+        import queue
         log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, 'mhars_events.jsonl')
         
         self.logger = logging.getLogger('mhars_structured')
         self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
+        
         # Prevent duplicate handlers if re-instantiated
-        if not self.logger.handlers:
-            handler = logging.FileHandler(log_file)
-            handler.setFormatter(logging.Formatter('%(message)s'))
-            self.logger.addHandler(handler)
+        if not getattr(self.logger, 'queue_listener_started', False):
+            # 1. Create a queue
+            self._log_queue = queue.Queue(-1)
+            
+            # 2. Create the QueueHandler (attached to the logger)
+            queue_handler = logging.handlers.QueueHandler(self._log_queue)
+            self.logger.addHandler(queue_handler)
+            
+            # 3. Create the actual FileHandler (runs in background)
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(logging.Formatter('%(message)s'))
+            
+            # 4. Create and start the listener
+            self._log_listener = logging.handlers.QueueListener(self._log_queue, file_handler)
+            self._log_listener.start()
+            self.logger.queue_listener_started = True
 
     # ── Model loading ──────────────────────────────────────────────────────────
     def _load_models(self, llm_path: Optional[str]):
@@ -452,8 +471,26 @@ class MHARS:
         log_entry = dataclasses.asdict(result)
         self.logger.info(json.dumps(log_entry))
 
+        # Issue 5 — Data Drift Detection
+        drift_detected = False
+        if hasattr(self, '_ae_score_history'):
+            self._ae_score_history.append(ae_score)
+            if len(self._ae_score_history) == self._ae_score_history.maxlen:
+                median_ae = np.median(self._ae_score_history)
+                # Configurable threshold, default 0.3 for warning
+                drift_threshold = 0.3
+                if median_ae > drift_threshold:
+                    drift_detected = True
+                    self.logger.warning(
+                        json.dumps({"event": "concept_drift_detected", "median_ae_score": median_ae, 
+                                    "message": f"Possible concept drift detected (median AE score {median_ae:.3f} > {drift_threshold}). Consider retraining the Autoencoder."})
+                    )
+
         # Update heartbeat
         self._registry.register_node(self.node_id, self.machine_name, status=result.action)
+
+        # Add drift flag to metadata
+        result.metadata["concept_drift_detected"] = drift_detected
 
         if self.verbose:
             print(result.summary())

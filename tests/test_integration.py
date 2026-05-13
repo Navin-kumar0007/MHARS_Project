@@ -48,3 +48,10 @@ def test_integration_pipeline_critical(system):
         
     assert res.action in ["emergency-shutdown", "shutdown", "alert", "throttle"], f"Expected a mitigating action, got {res.action}"
     assert res.urgency > 0.7
+
+def test_integration_pipeline_emergency_override(system):
+    """Test that temperatures exceeding safe maximum trigger an immediate emergency-shutdown."""
+    # Motor critical is 95.0. A reading of 96.0 should trigger an emergency shutdown.
+    reading = SensorReading(temp_c=96.0, load_pct=0.9, vibration_g=1.0)
+    res = system.run(reading)
+    assert res.action == "emergency-shutdown", f"Expected emergency-shutdown override, got {res.action}"

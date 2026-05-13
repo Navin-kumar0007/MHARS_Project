@@ -24,8 +24,10 @@ class AgentRegistry:
             return {}
 
     def _save(self, data: Dict[str, Any]):
-        with open(self.registry_file, 'w') as f:
+        tmp_file = self.registry_file + ".tmp"
+        with open(tmp_file, 'w') as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_file, self.registry_file)
 
     def register_node(self, node_id: str, machine_type: str, status: str = "active"):
         """Register or update a node's heartbeat in the registry."""
@@ -33,7 +35,8 @@ class AgentRegistry:
         registry[node_id] = {
             "machine_type": machine_type,
             "status": status,
-            "last_heartbeat": time.time()
+            "last_heartbeat": time.time(),
+            "last_updated": time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
         }
         self._save(registry)
 
@@ -46,3 +49,6 @@ class AgentRegistry:
             if (now - data.get("last_heartbeat", 0)) < timeout_seconds:
                 active[node_id] = data
         return active
+    def list_all_nodes(self) -> Dict[str, Any]:
+        """Return all nodes currently in the registry, regardless of timeout."""
+        return self._load()
