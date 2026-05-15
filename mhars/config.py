@@ -21,6 +21,7 @@ class Config:
     LLM                  = os.path.join(MODELS_DIR, 'Phi-3-mini-4k-instruct-q4.gguf')
     VIBRATION_DETECTOR   = os.path.join(MODELS_DIR, 'vibration_detector.pt')
     VIBRATION_META       = os.path.join(MODELS_DIR, 'vibration_detector_meta.json')
+    CNN_MODEL            = os.path.join(MODELS_DIR, 'mobilenet_cnn.pt')
 
     import json
     
@@ -63,6 +64,7 @@ class Config:
     IF_CONTAMINATION        = 0.03  # Isolation Forest expected noise ratio
     AE_THRESHOLD_PERCENTILE = 95    # Autoencoder anomaly threshold percentile
     LSTM_WINDOW             = 12    # sliding window size for LSTM
+    LSTM_PREDICTION_HORIZON_S = 1   # LSTM predicts this many seconds ahead (at 1Hz sampling)
 
     # ── PPO training ──────────────────────────────────────────────────────────
     PPO_TIMESTEPS    = 500_000
@@ -94,7 +96,10 @@ class Config:
         2: "throttle",
         3: "alert",
         4: "shutdown",
+        5: "emergency-shutdown",   # hardware safety override (not PPO-selectable)
     }
 
-    # ── Results / logging ─────────────────────────────────────────────────────
-    RESULTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'results')
+    # ── Online learning ───────────────────────────────────────────────────────
+    IF_ONLINE_RETRAIN       = True   # Toggle online Isolation Forest retraining
+    IF_RETRAIN_INTERVAL     = 500    # Retrain every N samples (was 100, too frequent)
+    IF_COLD_START_SAMPLES   = 50     # Skip IF pickle until online retrain fires once

@@ -116,7 +116,7 @@ class AlertGenerator:
 
         t0 = time.perf_counter()
 
-        force_template = context.pop('_force_template', False)
+        force_template = context.get('_force_template', False)
 
         if self.use_llm and not force_template:
             alert = self._llm_generate(

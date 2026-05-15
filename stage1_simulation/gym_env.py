@@ -32,13 +32,19 @@ from gymnasium import spaces
 
 
 # ── Machine profiles ───────────────────────────────────────────────────────────
-# Each machine type has different thermal characteristics
-MACHINE_PROFILES = {
-    0: {"name": "CPU",    "safe_max": 85.0, "critical": 100.0, "idle": 45.0, "load": 80.0, "heat_rate": 2.5},
-    1: {"name": "Motor",  "safe_max": 80.0, "critical":  95.0, "idle": 40.0, "load": 70.0, "heat_rate": 1.8},
-    2: {"name": "Server", "safe_max": 75.0, "critical":  90.0, "idle": 35.0, "load": 65.0, "heat_rate": 1.5},
-    3: {"name": "Engine", "safe_max": 95.0, "critical": 110.0, "idle": 70.0, "load": 100.0, "heat_rate": 3.8},
-}
+# Fix #16: Import from Config to eliminate training/inference profile mismatch.
+# The gym env now trains with the SAME thresholds that inference uses.
+try:
+    from mhars.config import Config as _Cfg
+    MACHINE_PROFILES = _Cfg.MACHINE_PROFILES
+except ImportError:
+    # Fallback for standalone use without mhars package installed
+    MACHINE_PROFILES = {
+        0: {"name": "CPU",    "safe_max": 85.0, "critical": 100.0, "idle": 45.0, "thermal_mass_J_K": 12.0, "conv_coeff": 0.08, "target_temp": 65.0, "heat_rate": 2.5},
+        1: {"name": "Motor",  "safe_max": 80.0, "critical":  95.0, "idle": 40.0, "thermal_mass_J_K": 25.0, "conv_coeff": 0.05, "target_temp": 60.0, "heat_rate": 1.8},
+        2: {"name": "Server", "safe_max": 75.0, "critical":  90.0, "idle": 35.0, "thermal_mass_J_K": 18.0, "conv_coeff": 0.07, "target_temp": 55.0, "heat_rate": 1.5},
+        3: {"name": "Engine", "safe_max": 100.0, "critical": 115.0, "idle": 60.0, "thermal_mass_J_K": 40.0, "conv_coeff": 0.03, "target_temp": 80.0, "heat_rate": 3.8},
+    }
 
 
 class ThermalEnv(gym.Env):
@@ -177,7 +183,7 @@ class ThermalEnv(gym.Env):
         R = Config.PPO_REWARD
         safe_max    = profile["safe_max"]
         target_temp = profile.get("target_temp", safe_max * 0.75)
-        temp_was_safe = prev_temp < (safe_max * 0.70)
+        temp_was_safe = prev_temp < (safe_max * 0.90)  # Fix #24: 0.70 was too aggressive
 
         if self.temp >= profile["critical"] or self.damage_accumulated > 5.0:
             reward = R["breach_penalty"]

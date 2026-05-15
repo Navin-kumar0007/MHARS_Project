@@ -47,10 +47,11 @@ app = FastAPI(
     version="2.1.0"
 )
 
-# ── CORS ───────────────────────────────────────────────────────────────────────
+# ── CORS (#11 fix: configurable origins, no wildcard in production) ──────────
+CORS_ORIGINS = os.environ.get("MHARS_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this to the dashboard URL
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,18 +65,23 @@ MHARS_REQUIRE_AUTH = os.environ.get("MHARS_REQUIRE_AUTH", "false").lower() == "t
 MHARS_SYNTHETIC_MODE = os.environ.get("MHARS_SYNTHETIC_MODE", "false").lower() == "true"
 
 async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
-    """Verify API key for HTTP routes (if MHARS_API_KEY is configured or required)."""
-    # If auth is required, we MUST have an API key set AND it must match the header
-    if MHARS_REQUIRE_AUTH:
-        if not MHARS_API_KEY:
-            raise HTTPException(status_code=500, detail="Server misconfiguration: MHARS_REQUIRE_AUTH is true but MHARS_API_KEY is not set.")
-        if not api_key or api_key != MHARS_API_KEY:
-            raise HTTPException(status_code=403, detail="Invalid or missing API key (X-API-Key header)")
-        return
-        
-    # If auth is NOT required, but an API key is set, we still check it if provided
-    if MHARS_API_KEY and api_key and api_key != MHARS_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API key provided")
+    """Verify API key for HTTP routes.
+    
+    Fix #12: Simplified, consistent logic:
+    - If MHARS_API_KEY is set, it is ALWAYS checked (whether required or optional).
+    - If MHARS_REQUIRE_AUTH is true and no key is configured, it's a server error.
+    """
+    if MHARS_REQUIRE_AUTH and not MHARS_API_KEY:
+        raise HTTPException(status_code=500, detail="Server misconfiguration: MHARS_REQUIRE_AUTH is true but MHARS_API_KEY is not set.")
+    
+    if MHARS_API_KEY:
+        # Key is configured: always validate if a key is provided OR if auth is required
+        if not api_key:
+            if MHARS_REQUIRE_AUTH:
+                raise HTTPException(status_code=403, detail="API key required (X-API-Key header)")
+            return  # No key provided, not required, pass through
+        if api_key != MHARS_API_KEY:
+            raise HTTPException(status_code=403, detail="Invalid API key")
 
 def verify_ws_token(token: str) -> bool:
     """Verify API key for WebSocket connections (via query param)."""
@@ -88,12 +94,16 @@ def verify_ws_token(token: str) -> bool:
 
 @app.on_event("startup")
 async def startup_event():
+    # Validate CORS origins
+    for origin in CORS_ORIGINS:
+        origin = origin.strip()
+        if origin and not origin.startswith("http"):
+            print(f"  [WARN] Malformed CORS origin: '{origin}'. Expected http(s)://...")
+
     # Security Warning
     if not MHARS_API_KEY and not MHARS_REQUIRE_AUTH:
-        # Check if we are bound to 0.0.0.0 (could be exposed)
         import socket
         try:
-            # We don't have the bind address here easily, but we can warn generally
             print("\n" + "!"*80)
             print("  SECURITY WARNING: MHARS API is running WITHOUT authentication.")
             print("  If this server is accessible over the network, anyone can control it.")
@@ -104,6 +114,10 @@ async def startup_event():
     
     if MHARS_SYNTHETIC_MODE:
         print("[INIT] Running in SYNTHETIC MODE (forcing multi-modal proxies)")
+    
+    # Note: Rate limiting on /api/inject_anomaly uses in-memory state.
+    # If running multiple Uvicorn workers, each worker has its own counter.
+    # For multi-worker deployments, use a shared store (Redis/file-based).
 
 # ── Global State ───────────────────────────────────────────────────────────────
 class SystemState:
@@ -223,6 +237,10 @@ ANOMALY_PROFILES = {
     },
 }
 
+# Rate limiter for anomaly injection (#13)
+_last_injection_time: float = 0.0
+_INJECTION_COOLDOWN: float = 5.0  # seconds between injections
+
 
 def apply_anomaly_to_temp(current_temp: float) -> float:
     """Apply the active anomaly injection to the temperature."""
@@ -281,6 +299,16 @@ async def get_system_status():
 @app.post("/api/inject_anomaly", dependencies=[Depends(verify_api_key)])
 async def inject_anomaly(req: AnomalyRequest):
     """Inject one of 5 anomaly types for live demonstration."""
+    # Rate limiting (#13)
+    global _last_injection_time
+    now = time.time()
+    if now - _last_injection_time < _INJECTION_COOLDOWN:
+        remaining = round(_INJECTION_COOLDOWN - (now - _last_injection_time), 1)
+        return {
+            "status": "rate_limited",
+            "message": f"Please wait {remaining}s before injecting another anomaly.",
+        }
+    
     if req.type not in ANOMALY_PROFILES:
         return {
             "status": "error",
@@ -290,6 +318,7 @@ async def inject_anomaly(req: AnomalyRequest):
     profile = ANOMALY_PROFILES[req.type]
     state.anomaly_injection = req.type
     state.anomaly_ticks_remaining = profile["duration"]
+    _last_injection_time = now
     return {
         "status": "success",
         "anomaly": req.type,
@@ -403,7 +432,11 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
                 current_temp = read_hardware_temp()
                 # Build SensorReading with real hardware context
                 from mhars.schemas import SensorReading
-                cpu_pct = psutil.cpu_percent(interval=0) / 100.0 if PSUTIL_AVAILABLE else 0.5
+                # Fix #8: Guard psutil call behind PSUTIL_AVAILABLE
+                if PSUTIL_AVAILABLE:
+                    cpu_pct = psutil.cpu_percent(interval=0) / 100.0
+                else:
+                    cpu_pct = 0.5
                 sr = SensorReading(
                     temp_c=current_temp,
                     load_pct=cpu_pct,
@@ -427,13 +460,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
             result = await run_in_threadpool(state.mhars.run, temp_celsius=sr, sync_alert=True)
 
             # ── Step 3: Apply PPO action feedback to the simulation ────────
+            # Fix #7: Aligned with Config.ACTIONS (removed phantom "increase-fan")
             action_effects = {
                 "throttle": -2.0,
-                "increase-fan": -1.0,
                 "fan+": -1.0,
                 "alert": -0.3,
-                "emergency-shutdown": -10.0,
                 "shutdown": -10.0,
+                "emergency-shutdown": -10.0,
             }
             if result.action in action_effects:
                 state.env.temp += action_effects[result.action]

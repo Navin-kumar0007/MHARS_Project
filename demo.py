@@ -14,6 +14,7 @@ import argparse
 # Parse arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("--synthetic", action="store_true", help="Enable synthetic mode")
+parser.add_argument("--no-interactive", action="store_true", help="Skip interactive prompts (for CI/CD)")
 args = parser.parse_args()
 
 if args.synthetic:
@@ -88,16 +89,19 @@ for r in results:
     print(f"  {icon} {r.current_temp:>5.1f}°C  →  {r.action:<12}  "
           f"urgency={r.urgency:.2f}  route={r.route}")
 
-# ── Demo 4: Dashboard (10 seconds) ────────────────────────────────────────────
-print("\n" + "=" * 58)
-print("  Demo 4 — Live Dashboard (10 seconds)")
-print("  Press Ctrl+C to stop early")
-print("=" * 58)
-input("\n  Press Enter to start dashboard...")
+# ── Demo 4: Dashboard (10 seconds) ───────────────────────────────────────────
+if not args.no_interactive:
+    print("\n" + "=" * 58)
+    print("  Demo 4 — Live Dashboard (10 seconds)")
+    print("  Press Ctrl+C to stop early")
+    print("=" * 58)
+    input("\n  Press Enter to start dashboard...")
 
-system4 = MHARS(machine_type_id=0, verbose=False)
-dash    = Dashboard(system4, refresh_hz=1)
-dash.start(source="simulation", duration_s=10)
+    system4 = MHARS(machine_type_id=0, verbose=False)
+    dash    = Dashboard(system4, refresh_hz=1)
+    dash.start(source="simulation", duration_s=10)
+else:
+    print("\n  [--no-interactive] Skipping Dashboard demo.")
 
 print("\nDemo complete.")
 print("To run the full system with your own temperature readings:")
