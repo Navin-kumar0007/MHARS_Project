@@ -328,3 +328,43 @@ class TestRequirementsTxt:
         assert not os.path.exists(req_path), \
             "Deprecated requirements.txt should be deleted"
 
+
+# ── Torch guards — no bare `import torch` ─────────────────────────────────────
+class TestTorchGuardsComprehensive:
+    def test_no_bare_import_torch_in_methods(self):
+        """All `import torch` inside methods must be guarded or removed.
+        The module-level import is inside try/except, which is correct.
+        Method-level bare imports would crash on edge devices without PyTorch.
+        """
+        core_path = os.path.join(os.path.dirname(__file__), '..', 'mhars', 'core.py')
+        with open(core_path, 'r') as f:
+            lines = f.readlines()
+        
+        bare_imports = []
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped == 'import torch':
+                # Check if it's inside the module-level try/except (lines ~37-41)
+                # That one is fine. Any other bare `import torch` is a bug.
+                if i < 45:  # module-level try/except block
+                    continue
+                bare_imports.append(f"Line {i}: {stripped}")
+        
+        assert len(bare_imports) == 0, \
+            f"Found bare 'import torch' outside module-level guard:\n" + \
+            "\n".join(bare_imports)
+
+
+# ── Gym action names use Config.ACTIONS ────────────────────────────────────────
+class TestGymActionConsistency:
+    def test_gym_uses_config_actions(self):
+        """NEW-4: gym_env.py should use Config.ACTIONS, not a hardcoded list."""
+        env_path = os.path.join(os.path.dirname(__file__), '..', 'stage1_simulation', 'gym_env.py')
+        with open(env_path, 'r') as f:
+            content = f.read()
+        # Should NOT have a hardcoded list of action names
+        assert '["do-nothing", "fan+", "throttle", "alert", "shutdown"]' not in content, \
+            "Gym env should use Config.ACTIONS, not a hardcoded list"
+        # Should reference Config.ACTIONS
+        assert 'Config.ACTIONS' in content, \
+            "Gym env should reference Config.ACTIONS for action name lookup"

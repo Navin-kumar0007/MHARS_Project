@@ -608,8 +608,7 @@ class MHARS:
         if len(window) < Config.LSTM_WINDOW:
             # Not enough history yet — use linear trend
             pred_norm = temp_norm + 0.01
-        elif self._lstm is not None:
-            import torch
+        elif self._lstm is not None and TORCH_AVAILABLE:
             x = torch.FloatTensor(window).unsqueeze(0).unsqueeze(-1)
             with torch.no_grad():
                 pred_norm = float(self._lstm(x).item())
@@ -623,9 +622,8 @@ class MHARS:
 
     def _compute_ae_score(self) -> float:
         window = list(self._temp_window)
-        if len(window) < Config.LSTM_WINDOW or self._ae_model is None:
+        if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
             return 0.2  # default low score when not enough data
-        import torch
         x = torch.FloatTensor(window).unsqueeze(0)
         with torch.no_grad():
             err = self._ae_model.reconstruction_error(x).item()
@@ -664,7 +662,9 @@ class MHARS:
         # Normalize using training statistics
         feat_norm = (feat - self._vib_mean) / (self._vib_std + 1e-8)
 
-        import torch
+        if not TORCH_AVAILABLE:
+            # Fallback if torch somehow not available
+            return float(np.clip(np.mean(np.abs(feat_norm)) * 0.5, 0, 1))
         x = torch.FloatTensor(feat_norm.reshape(1, -1))
         with torch.no_grad():
             error = self._vib_model.reconstruction_error(x).item()

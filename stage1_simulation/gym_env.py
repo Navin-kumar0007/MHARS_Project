@@ -220,7 +220,7 @@ class ThermalEnv(gym.Env):
             "fan_speed": round(self.fan_speed, 2),
             "load": round(self.load_level, 2),
             "damage": round(self.damage_accumulated, 3),
-            "action_name": ["do-nothing", "fan+", "throttle", "alert", "shutdown"][action],
+            "action_name": Config.ACTIONS.get(action, f"action-{action}"),
         }
 
         if self.render_mode == "human":
