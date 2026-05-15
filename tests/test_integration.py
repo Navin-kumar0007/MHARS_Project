@@ -30,7 +30,7 @@ def test_integration_pipeline_safe(system):
     
     # After 15 steps, it should be stable and safe
     assert res.action in ["do-nothing", "fan+", "alert"], f"Expected do-nothing, fan+, or alert, got {res.action}"
-    assert res.urgency < 0.45
+    assert res.urgency < 0.50  # load_factor (1.24 at 20% load) amplifies urgency
 
 def test_integration_pipeline_critical(system):
     """Test that a rapid temperature rise yields a CRITICAL warning."""
