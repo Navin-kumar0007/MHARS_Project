@@ -171,7 +171,7 @@ class SensorAcquisition:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
         try:
-            from stage2_ml.mobilenet_cnn import ThermalHotspotDetector
+            from stage2_ml.efficientnet_cnn import ThermalHotspotDetector
             detector = ThermalHotspotDetector()
             result = detector.predict_from_array(gray)
             return {**result, "source": "camera"}
@@ -216,7 +216,7 @@ class SensorAcquisition:
 
             filepath = os.path.join(self._image_dir, files[self._file_index % len(files)])
 
-            from stage2_ml.mobilenet_cnn import ThermalHotspotDetector
+            from stage2_ml.efficientnet_cnn import ThermalHotspotDetector
             detector = ThermalHotspotDetector()
             result = detector.predict(filepath)
             return {**result, "source": "file"}
@@ -244,7 +244,7 @@ class SensorAcquisition:
     def _simulate_image(self, current_temp: float, safe_max: float) -> Dict[str, Any]:
         """Synthesise CNN hotspot score from thermal dynamics."""
         try:
-            from stage2_ml.mobilenet_cnn import ThermalHotspotDetector
+            from stage2_ml.efficientnet_cnn import ThermalHotspotDetector
             detector = ThermalHotspotDetector()
             result = detector.predict_from_temperature(current_temp, safe_max)
             return {**result, "source": "simulated"}

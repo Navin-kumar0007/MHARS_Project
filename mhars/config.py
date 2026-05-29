@@ -21,7 +21,7 @@ class Config:
     LLM                  = os.path.join(MODELS_DIR, 'Phi-3-mini-4k-instruct-q4.gguf')
     VIBRATION_DETECTOR   = os.path.join(MODELS_DIR, 'vibration_detector.pt')
     VIBRATION_META       = os.path.join(MODELS_DIR, 'vibration_detector_meta.json')
-    CNN_MODEL            = os.path.join(MODELS_DIR, 'mobilenet_cnn.pt')
+    CNN_MODEL            = os.path.join(MODELS_DIR, 'efficientnet_cnn.pt')
 
     import json
     

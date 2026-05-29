@@ -297,8 +297,8 @@ class MHARS:
         # Multi-modal CNN Hotspot Detector
         self._cnn = None
         try:
-            from stage2_ml.mobilenet_cnn import ThermalHotspotDetector
-            cnn_path = os.path.join("models", "mobilenet_cnn.pt")
+            from stage2_ml.efficientnet_cnn import ThermalHotspotDetector
+            cnn_path = os.path.join("models", "efficientnet_cnn.pt")
             self._cnn = ThermalHotspotDetector(cnn_path if os.path.exists(cnn_path) else None)
             print("  ✓  CNN Hotspot Detector loaded")
         except Exception as e:
@@ -560,6 +560,11 @@ class MHARS:
         return float(t_norm * (p["critical"] - 15.0) + 15.0)
 
     def _compute_if_score(self, temp_norm: float) -> float:
+        # CPUs have highly erratic temperature jumps based on load.
+        # Isolation Forest is tuned for smoother mechanical thermal mass.
+        if self.machine_type_id in [0, 2]:
+            return 0.0
+            
         # Cold-start bypass: skip the pickle-loaded IF until online retrain has fired.
         # The pickle was trained on CMAPSS multi-sensor data, not our 5-feature vector.
         if self._if_model is None or (not self._if_has_retrained
@@ -621,6 +626,10 @@ class MHARS:
         return pred_norm, lstm_score
 
     def _compute_ae_score(self) -> float:
+        # AE model is trained on Motor thermal inertia. CPU temps are too dynamic.
+        if self.machine_type_id in [0, 2]:
+            return 0.0
+            
         window = list(self._temp_window)
         if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
             return 0.2  # default low score when not enough data
@@ -636,6 +645,11 @@ class MHARS:
         In a real deployment, these features would come from an accelerometer.
         Here we derive them from temperature dynamics (correlated physics model).
         """
+        # CPUs and Servers don't experience the same physical vibration as Motors/Engines.
+        # Skip vibration anomaly detection for these types.
+        if self.machine_type_id in [0, 2]:
+            return 0.0
+
         if self._vib_model is None:
             # Fallback: estimate vibration from temperature trend
             window = list(self._temp_window)
@@ -774,10 +788,12 @@ class MHARS:
         if urgency < 0.4:
             return "Normal Operations"
             
+        is_compute = self.machine_type_id in [0, 2] # CPU or Server
+            
         if top_contributor == "vibration":
-            return "Bearing / Mechanical Wear"
+            return "Fan Bearing Issue" if is_compute else "Bearing / Mechanical Wear"
         elif top_contributor == "audio":
-            return "Acoustic Cavitation / Grinding"
+            return "Coil Whine / Fan Noise" if is_compute else "Acoustic Cavitation / Grinding"
         elif top_contributor == "trend_forecast":
             return "Thermal Runaway"
         elif top_contributor == "pattern_check" and current_temp > self.profile["safe_max"] * 0.8:

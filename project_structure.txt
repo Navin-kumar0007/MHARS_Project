@@ -94,7 +94,7 @@
 │   ├── autoencoder.py
 │   ├── isolation_forest.py
 │   ├── lstm_predictor.py
-│   ├── mobilenet_cnn.py
+│   ├── efficientnet_cnn.py
 │   ├── run_stage2.py
 │   └── vibration_model.py
 ├── stage3_ai

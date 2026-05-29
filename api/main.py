@@ -48,7 +48,7 @@ app = FastAPI(
 )
 
 # ── CORS (#11 fix: configurable origins, no wildcard in production) ──────────
-CORS_ORIGINS = os.environ.get("MHARS_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+CORS_ORIGINS = os.environ.get("MHARS_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,null").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,

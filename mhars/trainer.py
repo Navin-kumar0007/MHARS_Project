@@ -67,7 +67,7 @@ class MHARSTrainer:
 
     def train_cnn(self):
         print("[Trainer] Training CNN Hotspot Detector...")
-        from stage2_ml.mobilenet_cnn import run_training
+        from stage2_ml.efficientnet_cnn import run_training
         run_training(model_path=Config.CNN_MODEL)
 
     def train_ppo(self, machine: int = 0, timesteps: int = None):

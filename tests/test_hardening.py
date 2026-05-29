@@ -22,7 +22,7 @@ class TestConfigFixes:
         """Bug #1: Config.CNN_MODEL was missing, causing trainer.py to crash."""
         from mhars.config import Config
         assert hasattr(Config, 'CNN_MODEL'), "Config.CNN_MODEL must be defined"
-        assert 'mobilenet_cnn.pt' in Config.CNN_MODEL
+        assert 'efficientnet_cnn.pt' in Config.CNN_MODEL
 
     def test_no_duplicate_results_dir(self):
         """Bug #27: RESULTS_DIR was defined twice in config.py."""

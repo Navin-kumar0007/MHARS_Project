@@ -18,7 +18,7 @@ def attention_weight(variance=None):
 
 def fuse(lstm_score, ae_score, if_score,
          cnn_score=None, audio_score=None,
-         cnn_var=None, audio_var=None):
+         cnn_var=None, audio_var=None, lstm_var=None):
     """
     Fuse all modality scores into Global Context Score.
     cnn_score/audio_score now required from real pipelines.
@@ -30,7 +30,7 @@ def fuse(lstm_score, ae_score, if_score,
     scores  = np.array([lstm_score, ae_score, if_score, cnn_s, audio_s],
                        dtype=np.float32)
     raw_w   = np.array([
-        attention_weight(None),
+        attention_weight(lstm_var),
         attention_weight(None),
         attention_weight(None),
         attention_weight(cnn_var),

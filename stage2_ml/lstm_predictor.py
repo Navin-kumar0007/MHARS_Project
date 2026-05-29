@@ -131,11 +131,38 @@ def load_model(model_path=os.path.join(os.path.dirname(os.path.abspath(__file__)
 def predict_next(model, window_12: np.ndarray) -> float:
     """
     Given 12 consecutive normalized temperature readings,
-    return the predicted next value (normalized).
+    return the predicted next value (normalized) without uncertainty.
     """
     x = torch.FloatTensor(window_12).unsqueeze(0).unsqueeze(-1)  # (1,12,1)
     with torch.no_grad():
         return model(x).item()
+
+
+def predict_mc(model, window_12: np.ndarray, num_samples: int = 30) -> dict:
+    """
+    Monte Carlo Dropout prediction.
+    Runs the forward pass multiple times with dropout enabled
+    to estimate epistemic uncertainty.
+    """
+    x = torch.FloatTensor(window_12).unsqueeze(0).unsqueeze(-1)  # (1,12,1)
+    
+    # Force dropout layers to be active
+    model.train() 
+    
+    predictions = []
+    with torch.no_grad():
+        for _ in range(num_samples):
+            predictions.append(model(x).item())
+            
+    # Restore to eval mode
+    model.eval()
+    
+    preds = np.array(predictions)
+    return {
+        "mean": float(np.mean(preds)),
+        "variance": float(np.var(preds)),
+        "std": float(np.std(preds))
+    }
 
 
 def run_training(model_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "lstm.pt")):
