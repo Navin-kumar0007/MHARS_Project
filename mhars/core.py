@@ -716,7 +716,6 @@ class MHARS:
             # Not enough history yet — use linear trend
             pred_norm = temp_norm + 0.01
         elif self._lstm is not None and TORCH_AVAILABLE:
-            import torch
             if self._lstm_version == "v2" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
                 # V2: multivariate BiLSTM+Attention input (batch, 12, 5)
                 multi_window = list(self._multi_sensor_window)
@@ -763,7 +762,6 @@ class MHARS:
             multi_window = list(self._multi_sensor_window)
             if len(multi_window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
                 return 0.2
-            import torch
             x = torch.FloatTensor([multi_window])  # (1, 12, 5)
             with torch.no_grad():
                 err = self._ae_model.reconstruction_error(x).item()
@@ -774,7 +772,6 @@ class MHARS:
             window = list(self._temp_window)
             if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
                 return 0.2
-            import torch
             x = torch.FloatTensor(window).unsqueeze(0)
             with torch.no_grad():
                 err = self._ae_model.reconstruction_error(x).item()
