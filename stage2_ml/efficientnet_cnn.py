@@ -1,10 +1,10 @@
 """
-MHARS — Stage 2: MobileNetV2 Thermal Hotspot Detector
+MHARS — Stage 2: EfficientNet-B0 Thermal Hotspot Detector
 =======================================================
 Fixes ISSUE-1: Multi-modal claim not backed by code.
 
 Processes thermal camera images (32×24 pixels from MLX90640,
-interpolated to 224×224 for MobileNetV2) and returns a hotspot
+interpolated to 224×224 for EfficientNet-B0) and returns a hotspot
 score in [0, 1].
 
 In real hardware deployment (Stage 4), this receives actual
@@ -12,8 +12,7 @@ MLX90640 frames. In simulation, we generate synthetic thermal
 images from temperature data using matplotlib colormaps —
 the pixel values represent real spatial heat distributions.
 
-Reference: Sandler et al. (2018). MobileNetV2: Inverted residuals
-and linear bottlenecks. CVPR 2018. https://arxiv.org/abs/1801.04381
+Reference: Tan, M., & Le, Q. (2019). EfficientNet: Rethinking model scaling for convolutional neural networks. ICML 2019.
 
 Reference: Gutiérrez et al. (2024). On-board thermal anomaly
 detection using ML. Aerospace, 11(7), 523.
@@ -84,7 +83,7 @@ def thermal_grid_to_tensor(temp_grid: np.ndarray,
                             target_size: int = 224) -> 'torch.Tensor':
     """
     Convert a (H, W) temperature grid to a normalized (1, 3, 224, 224)
-    tensor suitable for MobileNetV2 input.
+    tensor suitable for EfficientNet-B0 input.
 
     Normalization uses ImageNet mean/std since we use pretrained weights.
     The temperature values are mapped to [0, 1] before normalization.
@@ -114,10 +113,10 @@ def thermal_grid_to_tensor(temp_grid: np.ndarray,
 # ── MobileNetV2 hotspot detector ───────────────────────────────────────────────
 class ThermalHotspotDetector:
     """
-    Fine-tuned MobileNetV2 that outputs a hotspot severity score in [0, 1].
+    Fine-tuned EfficientNet-B0 that outputs a hotspot severity score in [0, 1].
     0 = no hotspot detected, 1 = critical hotspot.
 
-    Uses pretrained MobileNetV2 weights and replaces the classifier
+    Uses pretrained EfficientNet-B0 weights and replaces the classifier
     head with a single sigmoid output for hotspot severity.
     """
 
@@ -128,7 +127,7 @@ class ThermalHotspotDetector:
         self.device = device
 
         # Build model
-        self.model = tv_models.mobilenet_v2(weights="IMAGENET1K_V1")
+        self.model = tv_models.efficientnet_b0(weights="IMAGENET1K_V1")
 
         # Replace classifier: 1280 features → 1 score (sigmoid output)
         self.model.classifier = nn.Sequential(
@@ -219,12 +218,12 @@ def generate_training_data(n_samples: int = 1000,
     return torch.stack(X), torch.FloatTensor(y)
 
 
-def train_detector(model_path: str = "../models/mobilenet_cnn.pt",
+def train_detector(model_path: str = "../models/efficientnet_cnn.pt",
                    n_samples: int = 1000,
                    epochs: int = 5,
                    lr: float = 1e-3):
     """
-    Fine-tune the MobileNetV2 classifier head on synthetic thermal data.
+    Fine-tune the EfficientNet-B0 classifier head on synthetic thermal data.
     Only the classifier head is trained — the feature extractor is frozen.
     Runtime: ~2–5 minutes on CPU.
     """
@@ -232,7 +231,7 @@ def train_detector(model_path: str = "../models/mobilenet_cnn.pt",
         print("[CNN] PyTorch not available — skipping CNN training")
         return None
 
-    print(f"\n── MobileNetV2 Training ──────────────────────────────────────")
+    print(f"\n── EfficientNet-B0 Training ──────────────────────────────────────")
     print(f"  Generating {n_samples} synthetic thermal training images...")
 
     X, y = generate_training_data(n_samples=n_samples)
@@ -266,11 +265,11 @@ def train_detector(model_path: str = "../models/mobilenet_cnn.pt",
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
     torch.save(detector.model.state_dict(), model_path)
     print(f"  CNN model saved → {model_path}")
-    print(f"[PASS] MobileNetV2 hotspot detector trained\n")
+    print(f"[PASS] EfficientNet-B0 hotspot detector trained\n")
     return detector
 
 
-def run_training(model_path="../models/mobilenet_cnn.pt"):
+def run_training(model_path="../models/efficientnet_cnn.pt"):
     if not TORCH_AVAILABLE:
         print("[CNN] Skipping — PyTorch not installed")
         return None

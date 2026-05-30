@@ -70,8 +70,20 @@ python -m venv venv
 source venv/bin/activate        # Mac/Linux
 # venv\Scripts\activate         # Windows
 
-# 3. Install dependencies
-pip install -r requirements.txt
+# 3. Install dependencies (cross-platform)
+pip install -r requirements-core.txt
+
+# 4. Configure environment
+cp .env.example .env
+# Edit .env to set API key, ports, etc.
+
+# 5. Install MHARS as editable package
+pip install -e .
+```
+
+### Optional: GPU Acceleration
+```bash
+pip install -r requirements-gpu.txt
 ```
 
 ### Optional: Phi-3 Mini LLM (for real language alerts)
@@ -89,17 +101,22 @@ pip install llama-cpp-python
 
 ```python
 from mhars import MHARS
+from mhars.schemas import SensorReading
 
 # Initialise for CPU monitoring
 system = MHARS(machine_type_id=0)   # 0=CPU 1=Motor 2=Server 3=Engine
 
-# Process one temperature reading
-result = system.run(temp_celsius=72.5)
+# Process a multi-sensor reading
+reading = SensorReading(temp_c=72.5, load_pct=0.85, ambient_c=24.0)
+result = system.run(reading)
 
 print(result.action)        # "fan+"
 print(result.route)         # "both"
 print(result.urgency)       # 0.68
 print(result.alert)         # plain language alert text
+
+# Backward compatible: single temperature float still works
+result = system.run(temp_celsius=72.5)
 ```
 
 ### Run the demo
@@ -108,14 +125,36 @@ print(result.alert)         # plain language alert text
 python demo.py
 ```
 
-### Run the live dashboard
+### Run the full-stack dashboard
 
-```python
-from mhars import MHARS, Dashboard
+```bash
+# Terminal 1 — Backend API
+source venv/bin/activate
 
-system = MHARS(machine_type_id=0)
-dash   = Dashboard(system)
-dash.start(source="simulation")   # or "sensor" for real hardware
+# For local development (HTTP):
+uvicorn api.main:app --host 127.0.0.1 --port 8000
+
+# For production deployment (HTTPS/TLS):
+# uvicorn api.main:app --host 0.0.0.0 --port 443 --ssl-keyfile key.pem --ssl-certfile cert.pem
+
+# Terminal 2 — Open the static dashboard
+open dashboard_web.html     # macOS
+# Or open http://localhost:8000 in browser
+
+# Terminal 3 (optional) — Next.js dashboard
+cd dashboard
+npm install && npm run dev
+# Opens at http://localhost:3000
+```
+
+### Docker deployment (full stack)
+
+```bash
+cp .env.example .env
+# Edit .env to set MHARS_API_KEY for production
+docker-compose up --build
+# Dashboard: http://localhost:3000
+# API:       http://localhost:8000/docs
 ```
 
 ---
@@ -177,6 +216,16 @@ MHARS_Project/
 
 ---
 
+## Security & Privacy Considerations
+
+When deploying MHARS in a real factory or edge environment, several security and privacy factors must be addressed:
+
+1. **Edge vs. Cloud Processing**: MHARS supports a local execution model (`MHARSResult.route == "edge"`). Critical sensor data and vision/audio streams do not need to be transmitted to the cloud, preserving industrial trade secrets.
+2. **Data in Transit**: If the REST/WebSocket API is exposed over a network, ensure it is wrapped in TLS (HTTPS/WSS) using a reverse proxy like Nginx or Traefik.
+3. **API Authentication**: The FastAPI backend includes `X-API-Key` header authentication. Do not disable this in production (`MHARS_API_KEY` environment variable).
+4. **LLM Data Sanitization**: The Phi-3 Mini agent is designed to run entirely offline on-device via `llama.cpp`. No proprietary machine IDs or schematics are sent to third-party APIs (e.g., OpenAI) unless manually configured to do so.
+5. **Data Retention**: The telemetry database (`logs/mhars_events.jsonl`) should be rotated and securely archived according to your organization's data retention policies.
+
 ## Datasets
 
 **NASA CMAPSS** — turbofan engine degradation (primary training data)
@@ -189,8 +238,12 @@ Download `train_FD001.txt` and place it in `data/train_FD001.txt`.
 ```
 https://www.flir.com/oem/adas/adas-dataset-form/
 ```
+*(Alternatively, use the free open-source FLIR Starter dataset or similar thermal samples).*
 
-If datasets are not present, the code automatically uses a synthetic generator so all stages can be run immediately.
+### Reproducibility & Synthetic Multi-Modal Fallback
+
+If the CMAPSS or FLIR datasets are not present on your machine, **the system is still 100% operational**. 
+MHARS includes a built-in synthetic proxy generator that dynamically calculates highly realistic placeholder vibration features (via FFT simulacra) and audio metrics (MFCC-like variance) based on the rate-of-change of the CPU/Motor temperature. This ensures that any researcher can clone the repo, run `python demo.py`, and test the full 5-modality Attention Fusion pipeline out-of-the-box without waiting for large dataset downloads.
 
 ---
 

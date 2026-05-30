@@ -13,11 +13,23 @@ Usage:
     print(result.action)
 """
 
-import os, sys, json, time, pickle
+import os, sys, json, time, pickle, logging
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Union
 from collections import deque
+
+
+class _NumpySafeEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types (Issue #35)."""
+    def default(self, obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        elif isinstance(obj, (np.floating,)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 from mhars.schemas import SensorReading
 
@@ -88,9 +100,9 @@ class MHARS:
         self.verbose         = verbose
 
         # Apply global seed for reproducibility
-        import torch
         np.random.seed(Config.SEED)
-        torch.manual_seed(Config.SEED)
+        if TORCH_AVAILABLE:
+            torch.manual_seed(Config.SEED)
 
         # Rolling window for LSTM (last 12 readings)
         self._temp_window = deque(maxlen=Config.LSTM_WINDOW)
@@ -104,26 +116,101 @@ class MHARS:
 
         # Issue 5 — Online anomaly detection: rolling retrain buffer
         self._if_retrain_buffer: deque = deque(maxlen=500)
-        self._if_retrain_interval = 100  # retrain every N samples
+        self._if_retrain_interval = Config.IF_RETRAIN_INTERVAL
         self._if_sample_count = 0
+        self._if_has_retrained = False  # Cold-start flag: IF pickle is trained on
+                                        # CMAPSS multi-sensor, not our 5-feature vector.
+                                        # Skip it until online retraining fires once.
+
+        # Throttle registry heartbeat (#17)
+        self._last_heartbeat_time: float = 0.0
+        self._heartbeat_interval: float = 30.0  # seconds
 
         # Issue 6 — Uncertainty quantification: track recent score variance
         self._recent_urgencies: deque = deque(maxlen=30)
         self._recent_contexts: deque  = deque(maxlen=30)
+        
+        # New Feature — Data Drift Detection
+        self._ae_score_history: deque = deque(maxlen=100)
+
+        # Issue 5 — Structured logging
+        self._setup_logger()
+
+        # Issue 8 — Register node in multi-agent registry
+        from mhars.registry import AgentRegistry
+        self._registry = AgentRegistry()
+        self.node_id = f"{self.machine_name}_{os.getpid()}"
+        self._registry.register_node(self.node_id, self.machine_name)
 
         print(f"[MHARS] Initialising for machine: {self.machine_name}")
         self._load_models(llm_path)
         print(f"[MHARS] Ready ✓\n")
 
+    def _setup_logger(self):
+        import logging.handlers
+        import queue
+        log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, 'mhars_events.jsonl')
+        
+        self.logger = logging.getLogger('mhars_structured')
+        self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
+        
+        # Prevent duplicate handlers if re-instantiated
+        if not getattr(self.logger, 'queue_listener_started', False):
+            # 1. Create a queue
+            self._log_queue = queue.Queue(-1)
+            
+            # 2. Create the QueueHandler (attached to the logger)
+            queue_handler = logging.handlers.QueueHandler(self._log_queue)
+            self.logger.addHandler(queue_handler)
+            
+            # 3. Create the RotatingFileHandler (runs in background)
+            # Max 10MB per file, keep 5 backups
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file, maxBytes=10*1024*1024, backupCount=5
+            )
+            file_handler.setFormatter(logging.Formatter('%(message)s'))
+            
+            # 4. Create and start the listener
+            self._log_listener = logging.handlers.QueueListener(self._log_queue, file_handler)
+            self._log_listener.start()
+            self.logger.queue_listener_started = True
+
+    def close(self):
+        """Stop the background log listener and release file handles (#18)."""
+        if hasattr(self, '_log_listener'):
+            self._log_listener.stop()
+        if hasattr(self, '_llm_gen') and self._llm_gen is not None:
+            self._llm_gen.wait_for_alerts()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     # ── Model loading ──────────────────────────────────────────────────────────
     def _load_models(self, llm_path: Optional[str]):
         """Load all trained models. Gracefully handles missing files."""
+        from mhars.metadata_manager import MetadataManager
+        # Pass logger to MetadataManager for structured stale-model events
+        metadata = MetadataManager(max_age_days=30, logger=self.logger)
 
         # Isolation Forest
         self._if_model = None
         if os.path.exists(Config.ISOLATION_FOREST):
             with open(Config.ISOLATION_FOREST, 'rb') as f:
                 self._if_model = pickle.load(f)
+            metadata.check_model_freshness(Config.ISOLATION_FOREST, "Isolation Forest")
             print(f"  ✓  Isolation Forest loaded")
         else:
             print(f"  ⚠  Isolation Forest not found — skipping noise filter")
@@ -148,6 +235,7 @@ class MHARS:
             self._lstm = ThermalLSTM(hidden_size=hidden_size)
             self._lstm.load_state_dict(checkpoint)
             self._lstm.eval()
+            metadata.check_model_freshness(Config.LSTM, "Thermal LSTM")
             self._lstm_version = "v1"
             print(f"  ✓  LSTM V1 loaded (hidden_size={hidden_size})")
         else:
@@ -185,6 +273,7 @@ class MHARS:
                 with open(Config.AUTOENCODER_META) as f:
                     meta = json.load(f)
                 self._ae_threshold = meta.get("threshold", 0.05)
+            metadata.check_model_freshness(Config.AUTOENCODER, "Thermal Autoencoder")
             print(f"  ✓  Autoencoder V1 loaded (threshold={self._ae_threshold:.5f})")
         else:
             print(f"  ⚠  Autoencoder not found — using simple anomaly score")
@@ -220,6 +309,7 @@ class MHARS:
                 self._vib_mean      = np.array(vib_meta["mean"],  dtype=np.float32)
                 self._vib_std       = np.array(vib_meta["std"],   dtype=np.float32)
                 self._vib_threshold = vib_meta.get("threshold", 0.01)
+                metadata.check_model_freshness(Config.VIBRATION_DETECTOR, "Vibration Detector")
                 print(f"  ✓  Vibration Detector loaded (features={n_feat})")
             else:
                 print(f"  ⚠  Vibration meta not found — skipping")
@@ -252,8 +342,8 @@ class MHARS:
         # Multi-modal CNN Hotspot Detector
         self._cnn = None
         try:
-            from stage2_ml.mobilenet_cnn import ThermalHotspotDetector
-            cnn_path = os.path.join("models", "mobilenet_cnn.pt")
+            from stage2_ml.efficientnet_cnn import ThermalHotspotDetector
+            cnn_path = os.path.join("models", "efficientnet_cnn.pt")
             self._cnn = ThermalHotspotDetector(cnn_path if os.path.exists(cnn_path) else None)
             print("  ✓  CNN Hotspot Detector loaded")
         except Exception as e:
@@ -320,9 +410,9 @@ class MHARS:
         # Step 2 — Isolation Forest noise check
         if_score = self._compute_if_score(temp_norm)
 
-        # Issue 5 — Online anomaly detection retrain
+        # Issue 5 — Online anomaly detection retrain (guarded by Config toggle #3)
         self._if_sample_count += 1
-        if self._if_model is not None:
+        if self._if_model is not None and Config.IF_ONLINE_RETRAIN:
             window_data = list(self._temp_window)
             if len(window_data) >= 5:
                 feat = np.array([[
@@ -341,41 +431,54 @@ class MHARS:
         lstm_pred_norm, lstm_score, prediction_interval, conformal_boost = self._compute_lstm_score(temp_norm)
         lstm_pred_celsius = self._denormalize_temp(lstm_pred_norm)
 
-        # Issue 1 — Use load context to modulate anomaly interpretation
-        load_factor = 1.0 + (1.0 - sr.load_pct) * 0.3  # idle amplifies anomaly
+        # Load context modulates anomaly interpretation.
+        # Idle machines amplify anomaly signals (unexpected heat when no load).
+        load_factor = 1.0 + (1.0 - sr.load_pct) * 0.3
 
         # Step 4 — Autoencoder anomaly score
         ae_score = self._compute_ae_score()
 
         # Step 4b — Vibration anomaly score
-        vib_score = self._compute_vib_score(temp_norm)
+        if sr.vibration_g > 0.0:
+            # Map real vibration to score (e.g. >10g is critical)
+            vib_score = float(np.clip(sr.vibration_g / 10.0, 0, 1))
+        else:
+            vib_score = self._compute_vib_score(temp_norm)
 
         # Step 4c — Multi-modal inputs (CNN and Audio)
         cnn_score   = extra.get("cnn_score", 0.5)
         cnn_var     = extra.get("cnn_var", None)
-        audio_score = extra.get("audio_score", 0.5)
-        audio_var   = extra.get("audio_var", None)
+        
+        # Priority: SensorReading > extra kwargs > simulation fallback
+        audio_score = sr.audio_score if sr.audio_score is not None else extra.get("audio_score", 0.5)
+        audio_var   = sr.audio_var if sr.audio_var is not None else extra.get("audio_var", None)
 
         if self._cnn is not None and "cnn_score" not in extra:
             cnn_res = self._cnn.predict_from_temperature(temp_celsius_val, self.profile["safe_max"])
             cnn_score = cnn_res["hotspot_score"]
             cnn_var   = cnn_res["grid_variance"]
             
-        if self._audio is not None and "audio_score" not in extra:
+        if self._audio is not None and sr.audio_score is None and "audio_score" not in extra:
             aud_res = self._audio.process_from_temperature(temp_celsius_val, self.profile["safe_max"])
             audio_score = aud_res["audio_score"]
             audio_var   = aud_res["audio_variance"]
 
         # Step 5 — Attention fusion → context score + urgency + XAI
+        # Fix #10: Pass CNN and vibration as separate modalities instead of max()
         context, urgency, contributions, top_contributor = self._fuse(
-            lstm_score = lstm_score,
-            ae_score   = ae_score,
-            if_score   = if_score,
-            cnn_score  = max(cnn_score, vib_score),  # Fuse max physical stress
-            audio_score= audio_score,
-            cnn_var    = cnn_var,
-            audio_var  = audio_var,
+            lstm_score  = lstm_score,
+            ae_score    = ae_score,
+            if_score    = if_score,
+            cnn_score   = cnn_score,
+            audio_score = audio_score,
+            vib_score   = vib_score,
+            cnn_var     = cnn_var,
+            audio_var   = audio_var,
         )
+
+        # Apply load_factor to urgency so load context modulates ALL modalities.
+        # Idle machines showing anomalies are more suspicious than loaded ones.
+        urgency = float(np.clip(urgency * load_factor, 0, 1))
 
         # Step 5.5 — Anomaly Fingerprinting
         fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius_val)
@@ -424,13 +527,7 @@ class MHARS:
                 "context_score": context, "rul_minutes": rul_minutes,
                 "contributions": contributions, "top_contributor": top_contributor,
                 "fault_type": fault_type,
-                # Issue 1 — Multi-sensor context
-                "sensor_reading": {
-                    "temp_c": sr.temp_c, "load_pct": sr.load_pct,
-                    "ambient_c": sr.ambient_c, "dT_dt": sr.dT_dt,
-                    "humidity_pct": sr.humidity_pct, "vibration_g": sr.vibration_g,
-                },
-                # Issue 6 — Uncertainty quantification
+                "features": sr.to_feature_vector(),
                 "urgency_confidence": round(urgency_confidence, 3),
                 "urgency_variance": round(urgency_variance, 4),
                 # Phase 1 — Conformal prediction interval
@@ -441,6 +538,7 @@ class MHARS:
                 "ae_version": self._ae_version or "fallback",
             }
         )
+
 
         # Step 8 — LLM alert
         alert_ctx = {
@@ -475,6 +573,35 @@ class MHARS:
         else:
             result.alert = f"[{self.machine_name}] {temp_celsius_val:.1f}°C — action: {action}."
             result.llm_source = "fallback"
+
+        # Write structured log (with numpy-safe encoder #35)
+        import dataclasses
+        log_entry = dataclasses.asdict(result)
+        self.logger.info(json.dumps(log_entry, cls=_NumpySafeEncoder))
+
+        # Issue 5 — Data Drift Detection
+        drift_detected = False
+        if hasattr(self, '_ae_score_history'):
+            self._ae_score_history.append(ae_score)
+            if len(self._ae_score_history) == self._ae_score_history.maxlen:
+                median_ae = np.median(self._ae_score_history)
+                # Configurable threshold, default 0.3 for warning
+                drift_threshold = 0.3
+                if median_ae > drift_threshold:
+                    drift_detected = True
+                    self.logger.warning(
+                        json.dumps({"event": "concept_drift_detected", "median_ae_score": median_ae, 
+                                    "message": f"Possible concept drift detected (median AE score {median_ae:.3f} > {drift_threshold}). Consider retraining the Autoencoder."})
+                    )
+
+        # Update heartbeat (throttled to every 30s — #17)
+        now = time.time()
+        if now - self._last_heartbeat_time >= self._heartbeat_interval:
+            self._registry.register_node(self.node_id, self.machine_name, status=result.action)
+            self._last_heartbeat_time = now
+
+        # Add drift flag to metadata
+        result.metadata["concept_drift_detected"] = drift_detected
 
         if self.verbose:
             print(result.summary())
@@ -527,7 +654,15 @@ class MHARS:
         return [s2, s3, s4, s7, s11]
 
     def _compute_if_score(self, temp_norm: float) -> float:
-        if self._if_model is None:
+        # CPUs have highly erratic temperature jumps based on load.
+        # Isolation Forest is tuned for smoother mechanical thermal mass.
+        if self.machine_type_id in [0, 2]:
+            return 0.0
+            
+        # Cold-start bypass: skip the pickle-loaded IF until online retrain has fired.
+        # The pickle was trained on CMAPSS multi-sensor data, not our 5-feature vector.
+        if self._if_model is None or (not self._if_has_retrained
+                                       and self._if_sample_count < Config.IF_COLD_START_SAMPLES):
             return float(np.clip((temp_norm - 0.3) / 0.7, 0, 1))
         # Build a meaningful 5-sensor feature vector from temperature history
         # instead of feeding [t, t, t, t, t] which makes the IF useless
@@ -560,6 +695,7 @@ class MHARS:
             )
             new_model.fit(X)
             self._if_model = new_model
+            self._if_has_retrained = True  # Cold-start resolved
             if self.verbose:
                 print(f"  [IF] Online retrained on {len(X)} samples")
         except Exception as e:
@@ -573,7 +709,7 @@ class MHARS:
         if len(window) < Config.LSTM_WINDOW:
             # Not enough history yet — use linear trend
             pred_norm = temp_norm + 0.01
-        elif self._lstm is not None:
+        elif self._lstm is not None and TORCH_AVAILABLE:
             import torch
             if self._lstm_version == "v2" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
                 # V2: multivariate BiLSTM+Attention input (batch, 12, 5)
@@ -612,10 +748,14 @@ class MHARS:
         return pred_norm, lstm_score, prediction_interval, conformal_boost
 
     def _compute_ae_score(self) -> float:
+        # AE model is trained on Motor thermal inertia. CPU temps are too dynamic.
+        if self.machine_type_id in [0, 2]:
+            return 0.0
+            
         if self._ae_version == "v2":
             # V2: LSTM-AE with multivariate sequence input (batch, 12, 5)
             multi_window = list(self._multi_sensor_window)
-            if len(multi_window) < Config.LSTM_WINDOW or self._ae_model is None:
+            if len(multi_window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
                 return 0.2
             import torch
             x = torch.FloatTensor([multi_window])  # (1, 12, 5)
@@ -626,7 +766,7 @@ class MHARS:
         else:
             # V1: univariate linear AE (batch, 12)
             window = list(self._temp_window)
-            if len(window) < Config.LSTM_WINDOW or self._ae_model is None:
+            if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
                 return 0.2
             import torch
             x = torch.FloatTensor(window).unsqueeze(0)
@@ -634,6 +774,15 @@ class MHARS:
                 err = self._ae_model.reconstruction_error(x).item()
             score = err / (self._ae_threshold + 1e-8)
             return float(np.clip(score, 0, 1))
+        window = list(self._temp_window)
+        if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
+            return 0.2  # default low score when not enough data
+        x = torch.FloatTensor(window).unsqueeze(0)
+        with torch.no_grad():
+            err = self._ae_model.reconstruction_error(x).item()
+        score = err / (self._ae_threshold + 1e-8)
+        return float(np.clip(score, 0, 1))
+>>>>>>> origin/main
 
     def _compute_vib_score(self, temp_norm: float) -> float:
         """
@@ -641,6 +790,11 @@ class MHARS:
         In a real deployment, these features would come from an accelerometer.
         Here we derive them from temperature dynamics (correlated physics model).
         """
+        # CPUs and Servers don't experience the same physical vibration as Motors/Engines.
+        # Skip vibration anomaly detection for these types.
+        if self.machine_type_id in [0, 2]:
+            return 0.0
+
         if self._vib_model is None:
             # Fallback: estimate vibration from temperature trend
             window = list(self._temp_window)
@@ -667,7 +821,9 @@ class MHARS:
         # Normalize using training statistics
         feat_norm = (feat - self._vib_mean) / (self._vib_std + 1e-8)
 
-        import torch
+        if not TORCH_AVAILABLE:
+            # Fallback if torch somehow not available
+            return float(np.clip(np.mean(np.abs(feat_norm)) * 0.5, 0, 1))
         x = torch.FloatTensor(feat_norm.reshape(1, -1))
         with torch.no_grad():
             error = self._vib_model.reconstruction_error(x).item()
@@ -675,14 +831,15 @@ class MHARS:
         return float(np.clip(score, 0, 1))
 
     def _fuse(self, lstm_score, ae_score, if_score,
-              cnn_score=0.5, audio_score=0.5,
+              cnn_score=0.5, audio_score=0.5, vib_score=0.3,
               cnn_var=None, audio_var=None):
+        """6-modality attention fusion (#10 fix: CNN and vibration are now separate)."""
         def w(var):
             return 1.0 if var is None else 1.0 / (1.0 + var)
 
         scores  = np.array([lstm_score, ae_score, if_score,
-                             cnn_score, audio_score], dtype=np.float32)
-        weights = np.array([1.0, 1.0, 1.0, w(cnn_var), w(audio_var)],
+                             cnn_score, audio_score, vib_score], dtype=np.float32)
+        weights = np.array([1.0, 1.0, 1.0, w(cnn_var), w(audio_var), 1.0],
                             dtype=np.float32)
         weights /= weights.sum() + 1e-8
 
@@ -694,11 +851,12 @@ class MHARS:
         # Prevent division by zero if all scores are 0
         total_impact = np.dot(weights, scores) + 1e-8
         contrib = {
-            "trend_forecast": round((weights[0] * scores[0] / total_impact) * 100),
-            "pattern_check":  round((weights[1] * scores[1] / total_impact) * 100),
-            "outlier_scan":   round((weights[2] * scores[2] / total_impact) * 100),
-            "vibration":      round((weights[3] * scores[3] / total_impact) * 100),
-            "audio":          round((weights[4] * scores[4] / total_impact) * 100),
+            "trend_forecast": round(float(weights[0] * scores[0] / total_impact) * 100),
+            "pattern_check":  round(float(weights[1] * scores[1] / total_impact) * 100),
+            "outlier_scan":   round(float(weights[2] * scores[2] / total_impact) * 100),
+            "cnn_hotspot":    round(float(weights[3] * scores[3] / total_impact) * 100),
+            "audio":          round(float(weights[4] * scores[4] / total_impact) * 100),
+            "vibration":      round(float(weights[5] * scores[5] / total_impact) * 100),
         }
         top_contributor = max(contrib, key=contrib.get) if context > 0.05 else "none"
 
@@ -712,11 +870,13 @@ class MHARS:
         return "both"
 
     def _build_obs(self, temp_norm, pred_norm, ae_score, urgency) -> np.ndarray:
+        # Fix #30: use dynamic machine count instead of hardcoded 3.0
+        max_machine_id = max(len(Config.MACHINE_PROFILES) - 1, 1)
         return np.array([
             temp_norm,
             pred_norm,
             ae_score,
-            self.machine_type_id / 3.0,
+            self.machine_type_id / float(max_machine_id),
             float(np.clip(self._steps_since_action / 100.0, 0, 1)),
             urgency,
         ], dtype=np.float32)
@@ -748,16 +908,24 @@ class MHARS:
         return "do-nothing"
 
     def _estimate_rul(self, current_temp: float, predicted_temp: float, safe_max: float) -> Optional[float]:
-        """Estimate remaining useful life in minutes before hitting safe_max."""
-        delta_per_10min = predicted_temp - current_temp
-        if delta_per_10min <= 0:
+        """Estimate remaining useful life in minutes before hitting safe_max.
+        
+        The LSTM predicts Config.LSTM_PREDICTION_HORIZON_S seconds ahead.
+        delta_per_step is °C per that horizon, so:
+            RUL (seconds) = remaining_degrees / delta_per_step * horizon_s
+            RUL (minutes) = RUL (seconds) / 60
+        """
+        horizon_s = Config.LSTM_PREDICTION_HORIZON_S
+        delta_per_step = predicted_temp - current_temp  # °C per horizon
+        if delta_per_step <= 0:
             return None  # Temperature falling or stable — no immediate RUL concern
             
         remaining_degrees = safe_max - current_temp
         if remaining_degrees <= 0:
             return 0.0  # Already past threshold
             
-        minutes = (remaining_degrees / delta_per_10min) * 10.0
+        seconds = (remaining_degrees / delta_per_step) * horizon_s
+        minutes = seconds / 60.0
         return round(min(minutes, 999.0), 1)
 
     def _fingerprint_anomaly(self, urgency: float, top_contributor: str, current_temp: float) -> str:
@@ -765,10 +933,12 @@ class MHARS:
         if urgency < 0.4:
             return "Normal Operations"
             
+        is_compute = self.machine_type_id in [0, 2] # CPU or Server
+            
         if top_contributor == "vibration":
-            return "Bearing / Mechanical Wear"
+            return "Fan Bearing Issue" if is_compute else "Bearing / Mechanical Wear"
         elif top_contributor == "audio":
-            return "Acoustic Cavitation / Grinding"
+            return "Coil Whine / Fan Noise" if is_compute else "Acoustic Cavitation / Grinding"
         elif top_contributor == "trend_forecast":
             return "Thermal Runaway"
         elif top_contributor == "pattern_check" and current_temp > self.profile["safe_max"] * 0.8:

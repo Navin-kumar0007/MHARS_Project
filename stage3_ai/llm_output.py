@@ -36,6 +36,7 @@ Situation:
 - Current temperature: {current_temp:.1f}°C
 - Predicted temperature in 10 min: {predicted_temp:.1f}°C
 - Anomaly score: {anomaly_score:.2f} (0=normal, 1=critical)
+- Root Cause Hypothesis: {causal_reasoning}
 - Action taken by system: {action_name}
 - Urgency: {urgency:.2f}
 
@@ -95,18 +96,19 @@ class AlertGenerator:
         anomaly_score  = context.get("anomaly_score",  0.0)
         action_name    = context.get("action_name",    "do-nothing")
         urgency        = context.get("urgency",        0.0)
+        causal_reasoning = context.get("causal_reasoning", "Normal operation")
 
         t0 = time.perf_counter()
 
         if self.use_llm:
             alert = self._generate_llm(
                 machine_type, current_temp, predicted_temp,
-                anomaly_score, action_name, urgency
+                anomaly_score, action_name, urgency, causal_reasoning
             )
         else:
             alert = self._generate_template(
                 machine_type, current_temp, predicted_temp,
-                anomaly_score, action_name, urgency
+                anomaly_score, action_name, urgency, causal_reasoning
             )
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -119,7 +121,7 @@ class AlertGenerator:
         }
 
     def _generate_llm(self, machine_type, current_temp, predicted_temp,
-                      anomaly_score, action_name, urgency) -> str:
+                      anomaly_score, action_name, urgency, causal_reasoning) -> str:
         prompt = PROMPT_TEMPLATE.format(
             machine_type   = machine_type,
             current_temp   = current_temp,
@@ -127,6 +129,7 @@ class AlertGenerator:
             anomaly_score  = anomaly_score,
             action_name    = action_name,
             urgency        = urgency,
+            causal_reasoning = causal_reasoning
         )
         response = self.llm(
             prompt,
@@ -141,7 +144,7 @@ class AlertGenerator:
         return text
 
     def _generate_template(self, machine_type, current_temp, predicted_temp,
-                           anomaly_score, action_name, urgency) -> str:
+                           anomaly_score, action_name, urgency, causal_reasoning) -> str:
         """
         Rule-based template alert — used when no LLM is available.
         Produces readable alerts that are good enough for testing.
@@ -180,7 +183,8 @@ class AlertGenerator:
 
         sentence1 = (
             f"[{severity}] The {machine_type} is currently at {current_temp:.1f}°C "
-            f"with an anomaly score of {anomaly_score:.2f}, and temperature is {trend}."
+            f"with an anomaly score of {anomaly_score:.2f}, and temperature is {trend}. "
+            f"Likely cause: {causal_reasoning}."
         )
         sentence2 = f"{tone} — {action_desc}."
 
@@ -198,19 +202,19 @@ def run_tests(model_path: str = None):
             "machine_type": "CPU",
             "current_temp": 45.0, "predicted_temp": 48.0,
             "anomaly_score": 0.1,  "action_name": "do-nothing",
-            "urgency": 0.15,
+            "urgency": 0.15, "causal_reasoning": "Normal expected heating",
         },
         {
             "machine_type": "Motor",
             "current_temp": 72.0, "predicted_temp": 79.0,
             "anomaly_score": 0.6,  "action_name": "fan+",
-            "urgency": 0.65,
+            "urgency": 0.65, "causal_reasoning": "Slight inefficiency",
         },
         {
             "machine_type": "Server",
             "current_temp": 88.0, "predicted_temp": 95.0,
             "anomaly_score": 0.92, "action_name": "shutdown",
-            "urgency": 0.91,
+            "urgency": 0.91, "causal_reasoning": "External fault or cooling failure",
         },
     ]
 

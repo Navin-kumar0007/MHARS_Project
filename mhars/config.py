@@ -21,6 +21,7 @@ class Config:
     LLM                  = os.path.join(MODELS_DIR, 'Phi-3-mini-4k-instruct-q4.gguf')
     VIBRATION_DETECTOR   = os.path.join(MODELS_DIR, 'vibration_detector.pt')
     VIBRATION_META       = os.path.join(MODELS_DIR, 'vibration_detector_meta.json')
+    CNN_MODEL            = os.path.join(MODELS_DIR, 'efficientnet_cnn.pt')
 
     # ── V2 Enhanced model paths (Phase 1 Deep Analysis) ──────────────────────
     LSTM_V2              = os.path.join(MODELS_DIR, 'lstm_v2.pt')
@@ -39,29 +40,38 @@ class Config:
     CONFORMAL_COVERAGE   = 0.90   # 90% prediction interval coverage
     CONFORMAL_URGENCY_BOOST = 0.15  # urgency boost when upper bound exceeds safe_max
 
-    # ── Machine types ─────────────────────────────────────────────────────────
-    MACHINE_TYPES = {
-        0: "CPU",
-        1: "Motor",
-        2: "Server",
-        3: "Engine",
-    }
+    import json
 
-    MACHINE_PROFILES = {
-        # Issue 2 — RC thermal circuit model parameters per machine type:
-        #   thermal_mass_J_K  = thermal capacitance (Joules per Kelvin)
-        #   conv_coeff        = convective heat transfer coefficient (W/K)
-        #   target_temp       = ideal operating temperature for tracking reward
-        #   heat_rate         = max heat generation rate (°C/step)
-        0: {"name": "CPU",    "safe_max": 85.0,  "critical": 100.0, "idle": 45.0,
-            "thermal_mass_J_K": 12.0, "conv_coeff": 0.08, "target_temp": 65.0, "heat_rate": 2.5},
-        1: {"name": "Motor",  "safe_max": 80.0,  "critical": 95.0,  "idle": 40.0,
-            "thermal_mass_J_K": 25.0, "conv_coeff": 0.05, "target_temp": 60.0, "heat_rate": 1.8},
-        2: {"name": "Server", "safe_max": 75.0,  "critical": 90.0,  "idle": 35.0,
-            "thermal_mass_J_K": 18.0, "conv_coeff": 0.07, "target_temp": 55.0, "heat_rate": 1.5},
-        3: {"name": "Engine", "safe_max": 100.0, "critical": 115.0, "idle": 60.0,
-            "thermal_mass_J_K": 40.0, "conv_coeff": 0.03, "target_temp": 80.0, "heat_rate": 3.8},
-    }
+    # ── Machine types ─────────────────────────────────────────────────────────
+    # Dynamically load from JSON file to allow operators to add profiles
+    # without touching source code.
+    _machines_file = os.path.join(os.path.dirname(__file__), 'machines.json')
+    MACHINE_PROFILES = {}
+    MACHINE_TYPES = {}
+    
+    if os.path.exists(_machines_file):
+        try:
+            with open(_machines_file, 'r') as f:
+                _raw_profiles = json.load(f)
+                if _raw_profiles:
+                    for k, v in _raw_profiles.items():
+                        machine_id = int(k)
+                        MACHINE_PROFILES[machine_id] = v
+                        MACHINE_TYPES[machine_id] = v["name"]
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            # Issue 1 — Malformed config fallback
+            print(f"  [ERROR] Malformed or invalid machines.json: {e}. Falling back to defaults.")
+            _raw_profiles = None # Force fallback below
+    
+    if not MACHINE_PROFILES:
+        # Fallback if file goes missing or was malformed
+        MACHINE_TYPES = { 0: "CPU", 1: "Motor", 2: "Server", 3: "Engine" }
+        MACHINE_PROFILES = {
+            0: {"name": "CPU", "safe_max": 85.0, "critical": 100.0, "idle": 45.0, "thermal_mass_J_K": 12.0, "conv_coeff": 0.08, "target_temp": 65.0, "heat_rate": 2.5},
+            1: {"name": "Motor", "safe_max": 80.0, "critical": 95.0, "idle": 40.0, "thermal_mass_J_K": 25.0, "conv_coeff": 0.05, "target_temp": 60.0, "heat_rate": 1.8},
+            2: {"name": "Server", "safe_max": 75.0, "critical": 90.0, "idle": 35.0, "thermal_mass_J_K": 18.0, "conv_coeff": 0.07, "target_temp": 55.0, "heat_rate": 1.5},
+            3: {"name": "Engine", "safe_max": 100.0, "critical": 115.0, "idle": 60.0, "thermal_mass_J_K": 40.0, "conv_coeff": 0.03, "target_temp": 80.0, "heat_rate": 3.8},
+        }
 
     # ── RL Router thresholds ──────────────────────────────────────────────────
     EDGE_URGENCY_THRESHOLD  = 0.8   # above → edge only  (< 50 ms)
@@ -71,6 +81,7 @@ class Config:
     IF_CONTAMINATION        = 0.03  # Isolation Forest expected noise ratio
     AE_THRESHOLD_PERCENTILE = 95    # Autoencoder anomaly threshold percentile
     LSTM_WINDOW             = 12    # sliding window size for LSTM
+    LSTM_PREDICTION_HORIZON_S = 1   # LSTM predicts this many seconds ahead (at 1Hz sampling)
 
     # ── PPO training ──────────────────────────────────────────────────────────
     PPO_TIMESTEPS    = 500_000
@@ -102,7 +113,10 @@ class Config:
         2: "throttle",
         3: "alert",
         4: "shutdown",
+        5: "emergency-shutdown",   # hardware safety override (not PPO-selectable)
     }
 
-    # ── Results / logging ─────────────────────────────────────────────────────
-    RESULTS_DIR = os.path.join(os.path.dirname(__file__), '..', 'results')
+    # ── Online learning ───────────────────────────────────────────────────────
+    IF_ONLINE_RETRAIN       = True   # Toggle online Isolation Forest retraining
+    IF_RETRAIN_INTERVAL     = 500    # Retrain every N samples (was 100, too frequent)
+    IF_COLD_START_SAMPLES   = 50     # Skip IF pickle until online retrain fires once

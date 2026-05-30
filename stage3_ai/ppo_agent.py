@@ -30,6 +30,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from stage1_simulation.gym_env import ThermalEnv
+from mhars.config import Config
 
 
 # ── Training callback — prints progress every 50K steps ───────────────────────
@@ -80,6 +81,7 @@ def train(
     print(f"  Machine type:    {machine_type_id} (0=CPU 1=Motor 2=Server 3=Engine)")
     print(f"  Total timesteps: {total_timesteps:,}")
     print(f"  Parallel envs:   {n_envs}")
+    print(f"  Reward weights:  Config.PPO_REWARD (editable in mhars/config.py)")
     print(f"  Target: avg reward > 50 (random baseline ≈ -280)")
     print()
 
@@ -93,20 +95,19 @@ def train(
     # Evaluation environment (single, same machine type)
     eval_env = Monitor(ThermalEnv(machine_type_id=machine_type_id, max_steps=500))
 
-    # ── PPO hyperparameters ────────────────────────────────────────────────────
-    # clip_range=0.2 is the standard epsilon from Schulman et al. (2017).
-    # n_steps=2048 means each env collects 2048 steps before updating.
-    # With n_envs=4, that's 8192 samples per update — good for stability.
+    # ── PPO hyperparameters (from Config) ──────────────────────────────────────
+    # Reward shaping is handled in gym_env.py via Config.PPO_REWARD.
+    # Hyperparameters here control the optimizer, not the reward function.
     model = PPO(
         policy          = "MlpPolicy",
         env             = vec_env,
-        learning_rate   = 3e-4,
+        learning_rate   = Config.PPO_LEARNING_RATE,
         n_steps         = 2048,
         batch_size      = 64,
         n_epochs        = 10,
         gamma           = 0.99,         # discount factor
         gae_lambda      = 0.95,         # advantage estimation
-        clip_range      = 0.2,          # the key PPO safety parameter
+        clip_range      = Config.PPO_CLIP_RANGE,
         ent_coef        = 0.01,         # entropy bonus — encourages exploration
         verbose         = 0,            # we handle printing in callback
     )

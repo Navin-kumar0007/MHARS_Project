@@ -69,9 +69,9 @@ def run_cnn():
     print("\n" + "=" * 56)
     print("  Component 3c — CNN Hotspot Detector")
     print("=" * 56)
-    from stage2_ml.mobilenet_cnn import run_training
+    from stage2_ml.efficientnet_cnn import run_training
     # This might take a few minutes if PyTorch is available
-    cnn_model = run_training(model_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "mobilenet_cnn.pt"))
+    cnn_model = run_training(model_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "efficientnet_cnn.pt"))
     # If None, pytorch isn't available, we pass it anyway with a warning
     passed = True
     status = "PASS" if cnn_model is not None else "WARN (No PyTorch)"

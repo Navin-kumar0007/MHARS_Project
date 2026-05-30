@@ -32,7 +32,7 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
@@ -41,21 +41,83 @@ from mhars.core import MHARS
 from mhars.system_health import SystemHealthMonitor
 from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
 
-# ── App Setup ──────────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="MHARS Dashboard API",
-    description="Real-time monitoring backend for the MHARS Digital Twin",
-    version="2.0.0",
+    title="MHARS API",
+    description="Production-grade thermal monitoring and AI control API",
+    version="2.1.0"
 )
 
+# ── CORS (#11 fix: configurable origins, no wildcard in production) ──────────
+CORS_ORIGINS = os.environ.get("MHARS_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,null").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── Authentication ─────────────────────────────────────────────────────────────
+# Set MHARS_API_KEY environment variable to enable API key protection.
+# Set MHARS_REQUIRE_AUTH=true to strictly enforce authentication.
+MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "")
+MHARS_REQUIRE_AUTH = os.environ.get("MHARS_REQUIRE_AUTH", "false").lower() == "true"
+MHARS_SYNTHETIC_MODE = os.environ.get("MHARS_SYNTHETIC_MODE", "false").lower() == "true"
+
+async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
+    """Verify API key for HTTP routes.
+    
+    Fix #12: Simplified, consistent logic:
+    - If MHARS_API_KEY is set, it is ALWAYS checked (whether required or optional).
+    - If MHARS_REQUIRE_AUTH is true and no key is configured, it's a server error.
+    """
+    if MHARS_REQUIRE_AUTH and not MHARS_API_KEY:
+        raise HTTPException(status_code=500, detail="Server misconfiguration: MHARS_REQUIRE_AUTH is true but MHARS_API_KEY is not set.")
+    
+    if MHARS_API_KEY:
+        # Key is configured: always validate if a key is provided OR if auth is required
+        if not api_key:
+            if MHARS_REQUIRE_AUTH:
+                raise HTTPException(status_code=403, detail="API key required (X-API-Key header)")
+            return  # No key provided, not required, pass through
+        if api_key != MHARS_API_KEY:
+            raise HTTPException(status_code=403, detail="Invalid API key")
+
+def verify_ws_token(token: str) -> bool:
+    """Verify API key for WebSocket connections (via query param)."""
+    if MHARS_REQUIRE_AUTH:
+        if not MHARS_API_KEY: return False
+        return token == MHARS_API_KEY
+    if MHARS_API_KEY and token:
+        return token == MHARS_API_KEY
+    return True
+
+@app.on_event("startup")
+async def startup_event():
+    # Validate CORS origins
+    for origin in CORS_ORIGINS:
+        origin = origin.strip()
+        if origin and not origin.startswith("http"):
+            print(f"  [WARN] Malformed CORS origin: '{origin}'. Expected http(s)://...")
+
+    # Security Warning
+    if not MHARS_API_KEY and not MHARS_REQUIRE_AUTH:
+        import socket
+        try:
+            print("\n" + "!"*80)
+            print("  SECURITY WARNING: MHARS API is running WITHOUT authentication.")
+            print("  If this server is accessible over the network, anyone can control it.")
+            print("  To secure it, set MHARS_API_KEY and MHARS_REQUIRE_AUTH=true.")
+            print("!"*80 + "\n")
+        except:
+            pass
+    
+    if MHARS_SYNTHETIC_MODE:
+        print("[INIT] Running in SYNTHETIC MODE (forcing multi-modal proxies)")
+    
+    # Note: Rate limiting on /api/inject_anomaly uses in-memory state.
+    # If running multiple Uvicorn workers, each worker has its own counter.
+    # For multi-worker deployments, use a shared store (Redis/file-based).
 
 # ── Global State ───────────────────────────────────────────────────────────────
 class SystemState:
@@ -175,6 +237,10 @@ ANOMALY_PROFILES = {
     },
 }
 
+# Rate limiter for anomaly injection (#13)
+_last_injection_time: float = 0.0
+_INJECTION_COOLDOWN: float = 5.0  # seconds between injections
+
 
 def apply_anomaly_to_temp(current_temp: float) -> float:
     """Apply the active anomaly injection to the temperature."""
@@ -226,12 +292,23 @@ async def get_system_status():
             k: v["description"] for k, v in ANOMALY_PROFILES.items()
         },
         "active_anomaly": state.anomaly_injection,
+        "synthetic_mode": MHARS_SYNTHETIC_MODE,
     }
 
 
-@app.post("/api/inject_anomaly")
+@app.post("/api/inject_anomaly", dependencies=[Depends(verify_api_key)])
 async def inject_anomaly(req: AnomalyRequest):
     """Inject one of 5 anomaly types for live demonstration."""
+    # Rate limiting (#13)
+    global _last_injection_time
+    now = time.time()
+    if now - _last_injection_time < _INJECTION_COOLDOWN:
+        remaining = round(_INJECTION_COOLDOWN - (now - _last_injection_time), 1)
+        return {
+            "status": "rate_limited",
+            "message": f"Please wait {remaining}s before injecting another anomaly.",
+        }
+    
     if req.type not in ANOMALY_PROFILES:
         return {
             "status": "error",
@@ -241,6 +318,7 @@ async def inject_anomaly(req: AnomalyRequest):
     profile = ANOMALY_PROFILES[req.type]
     state.anomaly_injection = req.type
     state.anomaly_ticks_remaining = profile["duration"]
+    _last_injection_time = now
     return {
         "status": "success",
         "anomaly": req.type,
@@ -249,7 +327,7 @@ async def inject_anomaly(req: AnomalyRequest):
     }
 
 
-@app.post("/api/switch_machine")
+@app.post("/api/switch_machine", dependencies=[Depends(verify_api_key)])
 async def switch_machine(req: MachineRequest):
     """Switch to a different machine type. Reinitializes the entire AI pipeline."""
     if req.machine_type_id not in MACHINE_PROFILES:
@@ -266,7 +344,7 @@ async def switch_machine(req: MachineRequest):
     }
 
 
-@app.post("/api/reset")
+@app.post("/api/reset", dependencies=[Depends(verify_api_key)])
 async def reset_system():
     """Reset the environment to idle state without changing machine type."""
     state.env.reset()
@@ -290,7 +368,7 @@ async def get_alert_history():
     return {"alerts": list(state.alert_history)}
 
 
-@app.post("/api/toggle_mode")
+@app.post("/api/toggle_mode", dependencies=[Depends(verify_api_key)])
 async def toggle_mode():
     """Toggle between live hardware mode and simulation demo mode."""
     state.live_mode = not state.live_mode
@@ -324,13 +402,25 @@ async def get_system_health():
     return SystemHealthMonitor.snapshot(state.machine_type_id)
 
 
+@app.get("/api/registry")
+async def get_registry():
+    """Return the list of all registered nodes in the federated network."""
+    return state.mhars._registry.list_all_nodes()
+
+
 # ── WebSocket Telemetry Stream ─────────────────────────────────────────────────
 @app.websocket("/ws/telemetry")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(default="")):
     """
     Streams live telemetry data at 1Hz with the FULL expanded payload.
     Every internal AI variable is exposed for complete dashboard transparency.
+    Auth via: ws://host:port/ws/telemetry?token=YOUR_KEY (when MHARS_API_KEY is set)
     """
+    # Verify WebSocket auth
+    if not verify_ws_token(token):
+        await websocket.close(code=4003, reason="Invalid API key")
+        return
+
     await websocket.accept()
     print("[WebSocket] Client connected.")
 
@@ -342,7 +432,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 current_temp = read_hardware_temp()
                 # Build SensorReading with real hardware context
                 from mhars.schemas import SensorReading
-                cpu_pct = psutil.cpu_percent(interval=0) / 100.0 if PSUTIL_AVAILABLE else 0.5
+                # Fix #8: Guard psutil call behind PSUTIL_AVAILABLE
+                if PSUTIL_AVAILABLE:
+                    cpu_pct = psutil.cpu_percent(interval=0) / 100.0
+                else:
+                    cpu_pct = 0.5
                 sr = SensorReading(
                     temp_c=current_temp,
                     load_pct=cpu_pct,
@@ -362,16 +456,17 @@ async def websocket_endpoint(websocket: WebSocket):
 
             # ── Step 2: Run the complete MHARS AI pipeline ─────────────────
             # Run in threadpool to prevent blocking the WebSocket event loop during heavy ML inferences
+            # Pass synthetic mode flag to core via metadata if needed, but here we just use the global flag
             result = await run_in_threadpool(state.mhars.run, temp_celsius=sr, sync_alert=True)
 
             # ── Step 3: Apply PPO action feedback to the simulation ────────
+            # Fix #7: Aligned with Config.ACTIONS (removed phantom "increase-fan")
             action_effects = {
                 "throttle": -2.0,
-                "increase-fan": -1.0,
                 "fan+": -1.0,
                 "alert": -0.3,
-                "emergency-shutdown": -10.0,
                 "shutdown": -10.0,
+                "emergency-shutdown": -10.0,
             }
             if result.action in action_effects:
                 state.env.temp += action_effects[result.action]
