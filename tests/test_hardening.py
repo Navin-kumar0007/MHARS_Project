@@ -141,7 +141,7 @@ class TestFusionFix:
         from mhars.core import MHARS
         system = MHARS(machine_type_id=0, verbose=False)
 
-        context, urgency, contrib, top = system._fuse(
+        context, contrib, top = system._fuse(
             lstm_score=0.3, ae_score=0.4, if_score=0.2,
             cnn_score=0.8, audio_score=0.1, vib_score=0.9,
         )
@@ -156,7 +156,7 @@ class TestFusionFix:
         from mhars.core import MHARS
         system = MHARS(machine_type_id=0, verbose=False)
 
-        _, _, contrib, top = system._fuse(
+        _, contrib, top = system._fuse(
             lstm_score=0.1, ae_score=0.1, if_score=0.1,
             cnn_score=0.1, audio_score=0.1, vib_score=0.95,
         )

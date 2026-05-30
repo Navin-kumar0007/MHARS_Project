@@ -157,6 +157,100 @@ def make_lstm_windows(df: pd.DataFrame, window: int = 12):
             np.array(unit_ids))
 
 
+def make_lstm_windows_multivariate(df: pd.DataFrame, window: int = 12,
+                                    sensors: list = None):
+    """
+    Create multivariate sliding windows for the enhanced BiLSTM model.
+
+    Instead of a single sensor, this uses all 5 thermal sensors to create
+    (N, window, 5) input tensors. Target is still the primary sensor (s4).
+
+    Args:
+        df:      preprocessed DataFrame with {sensor}_norm columns
+        window:  sliding window size (default 12)
+        sensors: list of sensor names (default: THERMAL_SENSORS)
+
+    Returns:
+        X:        (N, window, n_sensors) float32 array
+        y:        (N,) float32 array — next-step primary sensor value
+        unit_ids: (N,) array of unit IDs for engine-wise cross-validation
+    """
+    if sensors is None:
+        sensors = THERMAL_SENSORS
+
+    norm_cols = [f"{s}_norm" for s in sensors]
+    # Ensure all norm columns exist
+    missing = [c for c in norm_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing normalized columns: {missing}. Run preprocess_multivariate() first.")
+
+    primary_norm = f"{PRIMARY_TEMP}_norm"
+    X, y, unit_ids = [], [], []
+
+    for unit_id, group in df.groupby("unit_id"):
+        # Extract sensor matrix (n_cycles, n_sensors)
+        sensor_matrix = group[norm_cols].values
+        primary_vals = group[primary_norm].values
+
+        for i in range(len(sensor_matrix) - window):
+            X.append(sensor_matrix[i:i + window])       # (window, n_sensors)
+            y.append(primary_vals[i + window])           # scalar
+            unit_ids.append(unit_id)
+
+    return (np.array(X, dtype=np.float32),
+            np.array(y, dtype=np.float32),
+            np.array(unit_ids))
+
+
+def make_rul_windows(df: pd.DataFrame, window: int = 12,
+                     sensors: list = None, rul_cap: int = 125):
+    """
+    Create multivariate windows with RUL targets for the RULPredictor.
+
+    RUL is capped at `rul_cap` cycles (piece-wise linear RUL labeling,
+    standard practice for CMAPSS benchmarks).
+
+    Returns:
+        X:        (N, window, n_sensors) float32 array
+        y_rul:    (N,) float32 array — capped RUL in cycles
+        unit_ids: (N,) array of unit IDs
+    """
+    if sensors is None:
+        sensors = THERMAL_SENSORS
+
+    norm_cols = [f"{s}_norm" for s in sensors]
+    X, y_rul, unit_ids = [], [], []
+
+    for unit_id, group in df.groupby("unit_id"):
+        sensor_matrix = group[norm_cols].values
+        rul_vals = group["rul"].values
+
+        for i in range(len(sensor_matrix) - window):
+            X.append(sensor_matrix[i:i + window])
+            y_rul.append(min(rul_vals[i + window], rul_cap))  # piece-wise cap
+            unit_ids.append(unit_id)
+
+    return (np.array(X, dtype=np.float32),
+            np.array(y_rul, dtype=np.float32),
+            np.array(unit_ids))
+
+
+def preprocess_multivariate(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize ALL 5 thermal sensors (not just the primary one).
+    This is required for the multivariate BiLSTM and LSTM-AE models.
+    Also adds the near_failure label.
+    """
+    df = df.copy()
+    for sensor in THERMAL_SENSORS:
+        if sensor in df.columns:
+            col_min = df[sensor].min()
+            col_max = df[sensor].max()
+            df[f"{sensor}_norm"] = (df[sensor] - col_min) / (col_max - col_min + 1e-8)
+    df["near_failure"] = (df["rul"] < 30).astype(int)
+    return df
+
+
 def plot_thermal_trends(df, n_units=5,
                          save_path="results/thermal_trends.png"):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)

@@ -108,6 +108,9 @@ class MHARS:
         self._temp_window = deque(maxlen=Config.LSTM_WINDOW)
         self._steps_since_action = 0
 
+        # V2 — Multivariate sensor window: stores (12, 5) sensor history
+        self._multi_sensor_window = deque(maxlen=Config.LSTM_WINDOW)
+
         # Issue 4 — Temporal context: full reading history for dT/dt
         self._reading_history: deque = deque(maxlen=60)  # 60 sec @ 1Hz
 
@@ -212,38 +215,80 @@ class MHARS:
         else:
             print(f"  ⚠  Isolation Forest not found — skipping noise filter")
 
-        # LSTM — detect hidden_size from checkpoint automatically
+        # LSTM — prefer V2 (BiLSTM+Attention), fall back to V1
         self._lstm = None
-        if TORCH_AVAILABLE and os.path.exists(Config.LSTM):
+        self._lstm_version = None  # "v2" or "v1"
+        if TORCH_AVAILABLE and os.path.exists(Config.LSTM_V2):
+            from mhars.models import ThermalLSTMv2
+            checkpoint = torch.load(Config.LSTM_V2, map_location="cpu")
+            hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
+            input_size = checkpoint["lstm.weight_ih_l0"].shape[1]
+            self._lstm = ThermalLSTMv2(input_size=input_size, hidden_size=hidden_size)
+            self._lstm.load_state_dict(checkpoint)
+            self._lstm.eval()
+            self._lstm_version = "v2"
+            print(f"  ✓  LSTM V2 loaded (BiLSTM+Attention, input={input_size}, hidden={hidden_size})")
+        elif TORCH_AVAILABLE and os.path.exists(Config.LSTM):
             from mhars.models import ThermalLSTM
             checkpoint = torch.load(Config.LSTM, map_location="cpu")
-            # Infer hidden_size from weight shape: weight_ih_l0 is (4*hidden, input)
             hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
             self._lstm = ThermalLSTM(hidden_size=hidden_size)
             self._lstm.load_state_dict(checkpoint)
             self._lstm.eval()
             metadata.check_model_freshness(Config.LSTM, "Thermal LSTM")
-            print(f"  ✓  LSTM loaded (hidden_size={hidden_size})")
+            self._lstm_version = "v1"
+            print(f"  ✓  LSTM V1 loaded (hidden_size={hidden_size})")
         else:
             print(f"  ⚠  LSTM not found — using linear trend prediction")
 
-        # Autoencoder + threshold
+        # Autoencoder — prefer V2 (LSTM-AE), fall back to V1 (linear AE)
         self._ae_model    = None
         self._ae_threshold = 0.05
-        if TORCH_AVAILABLE and os.path.exists(Config.AUTOENCODER):
+        self._ae_version   = None
+        if TORCH_AVAILABLE and os.path.exists(Config.AUTOENCODER_V2):
+            from mhars.models import ThermalAutoencoderLSTM
+            if os.path.exists(Config.AUTOENCODER_V2_META):
+                with open(Config.AUTOENCODER_V2_META) as f:
+                    ae_meta = json.load(f)
+                input_size = ae_meta.get("input_size", 5)
+                hidden_size = ae_meta.get("hidden_size", 32)
+                self._ae_model = ThermalAutoencoderLSTM(
+                    input_size=input_size, hidden_size=hidden_size, seq_len=12)
+                self._ae_model.load_state_dict(
+                    torch.load(Config.AUTOENCODER_V2, map_location="cpu"))
+                self._ae_model.eval()
+                self._ae_threshold = ae_meta.get("threshold", 0.05)
+                self._ae_version = "v2"
+                print(f"  ✓  LSTM-AE V2 loaded (input={input_size}, threshold={self._ae_threshold:.5f})")
+            else:
+                print(f"  ⚠  LSTM-AE V2 meta not found — skipping")
+        elif TORCH_AVAILABLE and os.path.exists(Config.AUTOENCODER):
             from mhars.models import ThermalAutoencoder
             self._ae_model = ThermalAutoencoder()
             self._ae_model.load_state_dict(
                 torch.load(Config.AUTOENCODER, map_location="cpu"))
             self._ae_model.eval()
+            self._ae_version = "v1"
             if os.path.exists(Config.AUTOENCODER_META):
                 with open(Config.AUTOENCODER_META) as f:
                     meta = json.load(f)
                 self._ae_threshold = meta.get("threshold", 0.05)
             metadata.check_model_freshness(Config.AUTOENCODER, "Thermal Autoencoder")
-            print(f"  ✓  Autoencoder loaded (threshold={self._ae_threshold:.5f})")
+            print(f"  ✓  Autoencoder V1 loaded (threshold={self._ae_threshold:.5f})")
         else:
             print(f"  ⚠  Autoencoder not found — using simple anomaly score")
+
+        # Conformal Prediction — load calibration if available
+        self._conformal = None
+        if os.path.exists(Config.CONFORMAL_META):
+            try:
+                from mhars.conformal import ConformalPredictor
+                self._conformal = ConformalPredictor.load(Config.CONFORMAL_META)
+                print(f"  ✓  Conformal Predictor loaded (coverage={self._conformal.coverage:.0%})")
+            except Exception as e:
+                print(f"  ⚠  Conformal predictor load failed: {e}")
+        else:
+            print(f"  ⚠  Conformal predictor not calibrated — no prediction intervals")
 
         # Vibration Detector
         self._vib_model     = None
@@ -356,6 +401,12 @@ class MHARS:
         temp_norm = self._normalize_temp(temp_celsius_val)
         self._temp_window.append(temp_norm)
 
+        # V2 — Feed multivariate sensor window (5 normalized sensor values)
+        # In production, these come from real sensors; here we synthesize
+        # correlated values from the primary temperature for compatibility
+        multi_sensor_values = self._build_multi_sensor_vector(sr, temp_norm)
+        self._multi_sensor_window.append(multi_sensor_values)
+
         # Step 2 — Isolation Forest noise check
         if_score = self._compute_if_score(temp_norm)
 
@@ -376,8 +427,8 @@ class MHARS:
                     and len(self._if_retrain_buffer) >= 50):
                 self._retrain_if()
 
-        # Step 3 — LSTM prediction
-        lstm_pred_norm, lstm_score = self._compute_lstm_score(temp_norm)
+        # Step 3 — LSTM prediction (now returns conformal interval + boost)
+        lstm_pred_norm, lstm_score, prediction_interval, conformal_boost = self._compute_lstm_score(temp_norm)
         lstm_pred_celsius = self._denormalize_temp(lstm_pred_norm)
 
         # Load context modulates anomaly interpretation.
@@ -412,9 +463,9 @@ class MHARS:
             audio_score = aud_res["audio_score"]
             audio_var   = aud_res["audio_variance"]
 
-        # Step 5 — Attention fusion → context score + urgency + XAI
+        # Step 5 — Attention fusion → context score + XAI
         # Fix #10: Pass CNN and vibration as separate modalities instead of max()
-        context, urgency, contributions, top_contributor = self._fuse(
+        context, contributions, top_contributor = self._fuse(
             lstm_score  = lstm_score,
             ae_score    = ae_score,
             if_score    = if_score,
@@ -425,14 +476,21 @@ class MHARS:
             audio_var   = audio_var,
         )
 
-        # Apply load_factor to urgency so load context modulates ALL modalities.
-        # Idle machines showing anomalies are more suspicious than loaded ones.
-        urgency = float(np.clip(urgency * load_factor, 0, 1))
+        # Step 5.2 — Base urgency driven by prediction proximity to critical threshold
+        base_urgency = (lstm_pred_celsius - 25.0) / (self.profile["critical"] - 25.0)
+        base_urgency = max(0.0, base_urgency)
+        
+        # Apply load factor
+        load_factor = 1.0 + (sr.load_pct * 0.5) if hasattr(sr, 'load_pct') else 1.0
+        
+        urgency = (base_urgency * 0.6 + context * 0.4) * load_factor
+        urgency = float(np.clip(urgency, 0, 1))
 
         # Step 5.5 — Anomaly Fingerprinting
         fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius_val)
 
-        # Step 6 — RL Router decision
+        # Step 6 — RL Router decision (apply conformal boost to urgency)
+        urgency = float(np.clip(urgency + conformal_boost, 0, 1))
         route = self._route(urgency)
 
         # Step 7 — PPO action
@@ -477,7 +535,13 @@ class MHARS:
                 "fault_type": fault_type,
                 "features": sr.to_feature_vector(),
                 "urgency_confidence": round(urgency_confidence, 3),
-                "urgency_variance":   round(urgency_variance, 4),
+                "urgency_variance": round(urgency_variance, 4),
+                # Phase 1 — Conformal prediction interval
+                "prediction_interval": prediction_interval,
+                "conformal_boost": round(conformal_boost, 4),
+                # Phase 1 — Model version tracking
+                "lstm_version": self._lstm_version or "fallback",
+                "ae_version": self._ae_version or "fallback",
             }
         )
 
@@ -559,6 +623,42 @@ class MHARS:
         p = self.profile
         return float(t_norm * (p["critical"] - 15.0) + 15.0)
 
+    def _build_multi_sensor_vector(self, sr: 'SensorReading', temp_norm: float) -> list:
+        """
+        Build a 5-element normalized sensor vector for v2 multivariate models.
+
+        Maps to CMAPSS thermal sensors [s2, s3, s4, s7, s11]:
+          s4 = primary temperature (temp_norm)
+          s2 = load-correlated temperature (LPC outlet)
+          s3 = HPC outlet temperature (slightly lagged)
+          s7 = total temperature at HPT outlet
+          s11 = static temperature at LPT outlet
+
+        In production deployment, these come directly from hardware sensors.
+        Here we synthesize correlated values from the SensorReading for compatibility.
+        """
+        # Primary sensor
+        s4 = temp_norm
+
+        # s2: load-correlated (LPC outlet) — higher load → higher temp
+        s2 = float(np.clip(temp_norm * (0.85 + 0.15 * sr.load_pct), 0, 1))
+
+        # s3: slightly lagged version (HPC outlet)
+        window = list(self._temp_window)
+        if len(window) >= 2:
+            s3 = float(np.clip((window[-1] + window[-2]) / 2.0, 0, 1))
+        else:
+            s3 = temp_norm
+
+        # s7: total temperature at HPT outlet — amplified version
+        s7 = float(np.clip(temp_norm * 1.05 + 0.02 * sr.dT_dt, 0, 1))
+
+        # s11: static temperature at LPT outlet — ambient-influenced
+        ambient_norm = (sr.ambient_c - 15.0) / (self.profile["critical"] - 15.0) if sr.ambient_c else 0.3
+        s11 = float(np.clip(temp_norm * 0.9 + ambient_norm * 0.1, 0, 1))
+
+        return [s2, s3, s4, s7, s11]
+
     def _compute_if_score(self, temp_norm: float) -> float:
         # CPUs have highly erratic temperature jumps based on load.
         # Isolation Forest is tuned for smoother mechanical thermal mass.
@@ -610,26 +710,73 @@ class MHARS:
 
     def _compute_lstm_score(self, temp_norm: float):
         window = list(self._temp_window)
+        prediction_interval = None
+
         if len(window) < Config.LSTM_WINDOW:
             # Not enough history yet — use linear trend
             pred_norm = temp_norm + 0.01
         elif self._lstm is not None and TORCH_AVAILABLE:
-            x = torch.FloatTensor(window).unsqueeze(0).unsqueeze(-1)
-            with torch.no_grad():
-                pred_norm = float(self._lstm(x).item())
+            if self._lstm_version == "v2" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
+                # V2: multivariate BiLSTM+Attention input (batch, 12, 5)
+                multi_window = list(self._multi_sensor_window)
+                x = torch.FloatTensor([multi_window])  # (1, 12, 5)
+                with torch.no_grad():
+                    pred_norm = float(self._lstm(x).item())
+            else:
+                # V1: univariate input (batch, 12, 1)
+                x = torch.FloatTensor(window).unsqueeze(0).unsqueeze(-1)
+                with torch.no_grad():
+                    pred_norm = float(self._lstm(x).item())
+
+            # Conformal prediction interval
+            if self._conformal is not None and self._conformal.is_calibrated:
+                interval = self._conformal.predict_interval(pred_norm)
+                prediction_interval = {
+                    "lower": round(self._denormalize_temp(interval["lower"]), 2),
+                    "upper": round(self._denormalize_temp(interval["upper"]), 2),
+                    "width_celsius": round(interval["width"] * (self.profile["critical"] - 15.0), 2),
+                    "quantile": round(interval["quantile"], 6),
+                }
         else:
             # Simple linear extrapolation
             trend = (window[-1] - window[-3]) / 2 if len(window) >= 3 else 0
             pred_norm = float(np.clip(temp_norm + trend * 10, 0, 1))
 
         lstm_score = float(np.clip(abs(pred_norm - temp_norm), 0, 1))
-        return pred_norm, lstm_score
+
+        # Urgency boost if conformal upper bound exceeds safe_max
+        conformal_boost = 0.0
+        if prediction_interval is not None:
+            if prediction_interval["upper"] > self.profile["safe_max"]:
+                conformal_boost = Config.CONFORMAL_URGENCY_BOOST
+
+        return pred_norm, lstm_score, prediction_interval, conformal_boost
 
     def _compute_ae_score(self) -> float:
         # AE model is trained on Motor thermal inertia. CPU temps are too dynamic.
         if self.machine_type_id in [0, 2]:
             return 0.0
             
+        if self._ae_version == "v2":
+            # V2: LSTM-AE with multivariate sequence input (batch, 12, 5)
+            multi_window = list(self._multi_sensor_window)
+            if len(multi_window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
+                return 0.2
+            x = torch.FloatTensor([multi_window])  # (1, 12, 5)
+            with torch.no_grad():
+                err = self._ae_model.reconstruction_error(x).item()
+            score = err / (self._ae_threshold + 1e-8)
+            return float(np.clip(score, 0, 1))
+        else:
+            # V1: univariate linear AE (batch, 12)
+            window = list(self._temp_window)
+            if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
+                return 0.2
+            x = torch.FloatTensor(window).unsqueeze(0)
+            with torch.no_grad():
+                err = self._ae_model.reconstruction_error(x).item()
+            score = err / (self._ae_threshold + 1e-8)
+            return float(np.clip(score, 0, 1))
         window = list(self._temp_window)
         if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
             return 0.2  # default low score when not enough data
@@ -638,6 +785,7 @@ class MHARS:
             err = self._ae_model.reconstruction_error(x).item()
         score = err / (self._ae_threshold + 1e-8)
         return float(np.clip(score, 0, 1))
+
 
     def _compute_vib_score(self, temp_norm: float) -> float:
         """
@@ -699,13 +847,11 @@ class MHARS:
         weights /= weights.sum() + 1e-8
 
         context = float(np.clip(np.dot(weights, scores), 0, 1))
-        top2    = np.sort(scores)[-2:]
-        urgency = float(np.clip(0.6 * top2[-1] + 0.4 * top2[-2], 0, 1))
         
         # XAI Contributions
         # Prevent division by zero if all scores are 0
         total_impact = np.dot(weights, scores) + 1e-8
-        contrib = {
+        contributions = {
             "trend_forecast": round(float(weights[0] * scores[0] / total_impact) * 100),
             "pattern_check":  round(float(weights[1] * scores[1] / total_impact) * 100),
             "outlier_scan":   round(float(weights[2] * scores[2] / total_impact) * 100),
@@ -713,9 +859,9 @@ class MHARS:
             "audio":          round(float(weights[4] * scores[4] / total_impact) * 100),
             "vibration":      round(float(weights[5] * scores[5] / total_impact) * 100),
         }
-        top_contributor = max(contrib, key=contrib.get) if context > 0.05 else "none"
+        top_contributor = max(contributions, key=contributions.get) if context > 0.05 else "none"
 
-        return context, urgency, contrib, top_contributor
+        return context, contributions, top_contributor
 
     def _route(self, urgency: float) -> str:
         if urgency >= Config.EDGE_URGENCY_THRESHOLD:
