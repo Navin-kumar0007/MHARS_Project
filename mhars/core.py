@@ -854,7 +854,7 @@ class MHARS:
         # XAI Contributions
         # Prevent division by zero if all scores are 0
         total_impact = np.dot(weights, scores) + 1e-8
-        contrib = {
+        contributions = {
             "trend_forecast": round(float(weights[0] * scores[0] / total_impact) * 100),
             "pattern_check":  round(float(weights[1] * scores[1] / total_impact) * 100),
             "outlier_scan":   round(float(weights[2] * scores[2] / total_impact) * 100),
