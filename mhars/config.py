@@ -22,6 +22,23 @@ class Config:
     VIBRATION_DETECTOR   = os.path.join(MODELS_DIR, 'vibration_detector.pt')
     VIBRATION_META       = os.path.join(MODELS_DIR, 'vibration_detector_meta.json')
 
+    # ── V2 Enhanced model paths (Phase 1 Deep Analysis) ──────────────────────
+    LSTM_V2              = os.path.join(MODELS_DIR, 'lstm_v2.pt')
+    AUTOENCODER_V2       = os.path.join(MODELS_DIR, 'autoencoder_lstm_v2.pt')
+    AUTOENCODER_V2_META  = os.path.join(MODELS_DIR, 'autoencoder_lstm_v2_meta.json')
+    RUL_MODEL            = os.path.join(MODELS_DIR, 'rul_predictor.pt')
+    CONFORMAL_META       = os.path.join(MODELS_DIR, 'conformal_meta.json')
+
+    # ── Multivariate sensor config ────────────────────────────────────────────
+    THERMAL_SENSORS      = ["s2", "s3", "s4", "s7", "s11"]
+    LSTM_INPUT_SIZE_V2   = 5   # number of sensor channels for BiLSTM
+    LSTM_HIDDEN_V2       = 128
+    LSTM_LAYERS_V2       = 2
+
+    # ── Conformal prediction ─────────────────────────────────────────────────
+    CONFORMAL_COVERAGE   = 0.90   # 90% prediction interval coverage
+    CONFORMAL_URGENCY_BOOST = 0.15  # urgency boost when upper bound exceeds safe_max
+
     # ── Machine types ─────────────────────────────────────────────────────────
     MACHINE_TYPES = {
         0: "CPU",

@@ -1,0 +1,1 @@
+{"threshold": 0.006941519677639008, "seq_len": 12, "input_size": 5, "hidden_size": 32, "normal_mean_error": 0.005383, "anomaly_mean_error": 0.005164}
