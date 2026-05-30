@@ -463,9 +463,9 @@ class MHARS:
             audio_score = aud_res["audio_score"]
             audio_var   = aud_res["audio_variance"]
 
-        # Step 5 — Attention fusion → context score + urgency + XAI
+        # Step 5 — Attention fusion → context score + XAI
         # Fix #10: Pass CNN and vibration as separate modalities instead of max()
-        context, urgency, contributions, top_contributor = self._fuse(
+        context, contributions, top_contributor = self._fuse(
             lstm_score  = lstm_score,
             ae_score    = ae_score,
             if_score    = if_score,
@@ -476,9 +476,15 @@ class MHARS:
             audio_var   = audio_var,
         )
 
-        # Apply load_factor to urgency so load context modulates ALL modalities.
-        # Idle machines showing anomalies are more suspicious than loaded ones.
-        urgency = float(np.clip(urgency * load_factor, 0, 1))
+        # Step 5.2 — Base urgency driven by prediction proximity to critical threshold
+        base_urgency = (lstm_pred_celsius - 25.0) / (self.profile["critical"] - 25.0)
+        base_urgency = max(0.0, base_urgency)
+        
+        # Apply load factor
+        load_factor = 1.0 + (sr.load_pct * 0.5) if hasattr(sr, 'load_pct') else 1.0
+        
+        urgency = (base_urgency * 0.6 + context * 0.4) * load_factor
+        urgency = float(np.clip(urgency, 0, 1))
 
         # Step 5.5 — Anomaly Fingerprinting
         fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius_val)
@@ -782,7 +788,7 @@ class MHARS:
             err = self._ae_model.reconstruction_error(x).item()
         score = err / (self._ae_threshold + 1e-8)
         return float(np.clip(score, 0, 1))
->>>>>>> origin/main
+
 
     def _compute_vib_score(self, temp_norm: float) -> float:
         """
@@ -844,8 +850,6 @@ class MHARS:
         weights /= weights.sum() + 1e-8
 
         context = float(np.clip(np.dot(weights, scores), 0, 1))
-        top2    = np.sort(scores)[-2:]
-        urgency = float(np.clip(0.6 * top2[-1] + 0.4 * top2[-2], 0, 1))
         
         # XAI Contributions
         # Prevent division by zero if all scores are 0
@@ -858,9 +862,9 @@ class MHARS:
             "audio":          round(float(weights[4] * scores[4] / total_impact) * 100),
             "vibration":      round(float(weights[5] * scores[5] / total_impact) * 100),
         }
-        top_contributor = max(contrib, key=contrib.get) if context > 0.05 else "none"
+        top_contributor = max(contributions, key=contributions.get) if context > 0.05 else "none"
 
-        return context, urgency, contrib, top_contributor
+        return context, contributions, top_contributor
 
     def _route(self, urgency: float) -> str:
         if urgency >= Config.EDGE_URGENCY_THRESHOLD:
