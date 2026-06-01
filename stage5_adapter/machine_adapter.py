@@ -89,11 +89,11 @@ def find_most_similar_machine(new_machine_id: int,
     return best_id, best_sim
 
 
-# ── LSTM Machine Adapter ───────────────────────────────────────────────────────
-class MachineAdapter:
+# ── LSTM Machine Adapter V1 ────────────────────────────────────────────────
+class MachineAdapterV1:
     """
-    Adapts a pre-trained LSTM to a new machine type using transfer learning.
-    Freezes the LSTM layer, fine-tunes only the linear output head.
+    V1 adapter: Freezes LSTM, fine-tunes only linear head.
+    Kept for backward compatibility.
     """
 
     def __init__(self, base_model_path: str, similar_machine_id: int):
@@ -151,6 +151,231 @@ class MachineAdapter:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.model.state_dict(), path)
         print(f"  Adapted model saved → {path}")
+
+
+# Keep backward-compatible alias
+MachineAdapter = MachineAdapterV1
+
+
+# ── Progressive Machine Adapter V2 (Phase 2) ──────────────────────────────
+class ProgressiveMachineAdapter:
+    """
+    Phase 2: 3-phase progressive unfreezing for better few-shot transfer.
+    
+    Phase 1 (epochs 1–10):  Only output layer, LR=0.01
+    Phase 2 (epochs 11–25): Output + last LSTM layer, LR=0.001
+    Phase 3 (epochs 26–30): All layers with tiny LR=0.0001
+    
+    Supports both V1 (ThermalLSTM) and V2 (ThermalLSTMv2) models,
+    auto-detected from checkpoint shape.
+    """
+
+    def __init__(self, base_model_path: str, similar_machine_id: int):
+        self.similar_machine_id = similar_machine_id
+        self.is_v2 = False
+        
+        checkpoint = torch.load(base_model_path, map_location="cpu", weights_only=False)
+        
+        # Auto-detect V1 vs V2 from checkpoint keys
+        if "attention_weight.weight" in checkpoint:
+            # V2: BiLSTM+Attention
+            from mhars.models import ThermalLSTMv2
+            hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
+            input_size = checkpoint["lstm.weight_ih_l0"].shape[1]
+            self.model = ThermalLSTMv2(input_size=input_size, hidden_size=hidden_size)
+            self.is_v2 = True
+            print(f"  [Adapter] Detected V2 model (BiLSTM+Attention, input={input_size})")
+        else:
+            # V1: Standard LSTM
+            hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
+            self.model = ThermalLSTM(hidden_size=hidden_size)
+            print(f"  [Adapter] Detected V1 model (LSTM, hidden={hidden_size})")
+
+        self.model.load_state_dict(checkpoint)
+        self.phase_history = []  # track RMSE per phase
+        print(f"  [Adapter] Source machine: {similar_machine_id}")
+
+    def _freeze_all(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+    def _unfreeze_layer(self, layer_name):
+        for name, param in self.model.named_parameters():
+            if layer_name in name:
+                param.requires_grad = True
+
+    def _unfreeze_all(self):
+        for param in self.model.parameters():
+            param.requires_grad = True
+
+    def _get_trainable_params(self):
+        return filter(lambda p: p.requires_grad, self.model.parameters())
+
+    def _train_phase(self, dl, optimizer, criterion, epochs, phase_name, verbose=True):
+        """Train for a specified number of epochs and return avg loss."""
+        self.model.train()
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            n = 0
+            for xb, yb in dl:
+                optimizer.zero_grad()
+                preds = self.model(xb)
+                loss = criterion(preds, yb)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                optimizer.step()
+                epoch_loss += loss.item() * len(xb)
+                n += len(xb)
+        return epoch_loss / max(n, 1)
+
+    def _evaluate(self, X_val, y_val):
+        """Compute RMSE on validation data."""
+        self.model.eval()
+        if self.is_v2:
+            x = torch.FloatTensor(X_val)
+        else:
+            x = torch.FloatTensor(X_val).unsqueeze(-1)
+        with torch.no_grad():
+            preds = self.model(x).numpy()
+        rmse = float(np.sqrt(np.mean((preds - y_val) ** 2)))
+        return rmse
+
+    def adapt(self, X_new, y_new, n_samples=100, verbose=True):
+        """
+        3-phase progressive adaptation.
+        
+        Args:
+            X_new: Training data. V1: (N, window), V2: (N, window, 5)
+            y_new: Target values (N,)
+            n_samples: Number of samples to use for adaptation
+        
+        Returns:
+            Final validation RMSE
+        """
+        X_adapt = X_new[:n_samples]
+        y_adapt = y_new[:n_samples]
+        X_val = X_new[n_samples:n_samples + 200]
+        y_val = y_new[n_samples:n_samples + 200]
+
+        if self.is_v2:
+            x_tensor = torch.FloatTensor(X_adapt)
+        else:
+            x_tensor = torch.FloatTensor(X_adapt).unsqueeze(-1)
+
+        dl = DataLoader(
+            TensorDataset(x_tensor, torch.FloatTensor(y_adapt)),
+            batch_size=32, shuffle=True,
+        )
+        criterion = nn.MSELoss()
+
+        # ── Phase 1: Output layer only (10 epochs, LR=0.01) ──
+        if verbose:
+            print(f"  [Phase 1] Fine-tuning output layer only...")
+        self._freeze_all()
+        self._unfreeze_layer("linear")
+        if self.is_v2:
+            self._unfreeze_layer("attention_weight")  # also unfreeze attention head
+        optimizer = torch.optim.Adam(self._get_trainable_params(), lr=0.01)
+        self._train_phase(dl, optimizer, criterion, epochs=10, phase_name="Phase 1")
+        rmse_p1 = self._evaluate(X_val, y_val)
+        self.phase_history.append(("Phase 1: Output only", rmse_p1))
+        if verbose:
+            print(f"    RMSE after Phase 1: {rmse_p1:.4f}")
+
+        # ── Phase 2: Output + last LSTM layer (15 epochs, LR=0.001) ──
+        if verbose:
+            print(f"  [Phase 2] Unfreezing last LSTM layer...")
+        if self.is_v2:
+            # BiLSTM: unfreeze layer 1 (last layer)
+            self._unfreeze_layer("lstm.weight_ih_l1")
+            self._unfreeze_layer("lstm.weight_hh_l1")
+            self._unfreeze_layer("lstm.bias_ih_l1")
+            self._unfreeze_layer("lstm.bias_hh_l1")
+        else:
+            self._unfreeze_layer("lstm.weight_hh_l0")
+            self._unfreeze_layer("lstm.bias_hh_l0")
+        optimizer = torch.optim.Adam(self._get_trainable_params(), lr=0.001)
+        self._train_phase(dl, optimizer, criterion, epochs=15, phase_name="Phase 2")
+        rmse_p2 = self._evaluate(X_val, y_val)
+        self.phase_history.append(("Phase 2: Output + LSTM-last", rmse_p2))
+        if verbose:
+            print(f"    RMSE after Phase 2: {rmse_p2:.4f}")
+
+        # ── Phase 3: All layers with tiny LR (5 epochs, LR=0.0001) ──
+        if verbose:
+            print(f"  [Phase 3] Full model fine-tuning...")
+        self._unfreeze_all()
+        optimizer = torch.optim.Adam(self._get_trainable_params(), lr=0.0001)
+        self._train_phase(dl, optimizer, criterion, epochs=5, phase_name="Phase 3")
+        rmse_p3 = self._evaluate(X_val, y_val)
+        self.phase_history.append(("Phase 3: Full fine-tune", rmse_p3))
+        if verbose:
+            print(f"    RMSE after Phase 3: {rmse_p3:.4f}")
+
+        return rmse_p3
+
+    def save(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(self.model.state_dict(), path)
+        print(f"  Adapted model saved → {path}")
+
+
+# ── Meta-Learning Adapter (Phase 3 MAML) ───────────────────────────────────
+class MetaLearningAdapter(ProgressiveMachineAdapter):
+    """
+    Phase 3: Model-Agnostic Meta-Learning (MAML) Adapter for extreme few-shot
+    adaptation (e.g., < 10 samples).
+    
+    Uses First-Order MAML (FOMAML) to meta-train the model weights such that
+    a few gradient steps on a new machine's data leads to rapid convergence.
+    """
+    
+    def meta_train(self, tasks, meta_lr=0.001, inner_lr=0.01, inner_steps=1, meta_epochs=10):
+        """
+        tasks: List of (X_support, y_support, X_query, y_query) for different machines
+        """
+        optimizer = torch.optim.Adam(self._get_trainable_params(), lr=meta_lr)
+        criterion = nn.MSELoss()
+        
+        for epoch in range(meta_epochs):
+            meta_loss = 0.0
+            optimizer.zero_grad()
+            
+            for X_s, y_s, X_q, y_q in tasks:
+                # 1. Clone model state
+                original_state = {k: v.clone() for k, v in self.model.state_dict().items()}
+                
+                # 2. Inner loop on support set
+                inner_opt = torch.optim.SGD(self._get_trainable_params(), lr=inner_lr)
+                if self.is_v2:
+                    xs = torch.FloatTensor(X_s)
+                else:
+                    xs = torch.FloatTensor(X_s).unsqueeze(-1)
+                ys = torch.FloatTensor(y_s)
+                
+                for _ in range(inner_steps):
+                    inner_opt.zero_grad()
+                    loss = criterion(self.model(xs), ys)
+                    loss.backward()
+                    inner_opt.step()
+                
+                # 3. Outer loop loss on query set
+                if self.is_v2:
+                    xq = torch.FloatTensor(X_q)
+                else:
+                    xq = torch.FloatTensor(X_q).unsqueeze(-1)
+                yq = torch.FloatTensor(y_q)
+                
+                query_loss = criterion(self.model(xq), yq)
+                query_loss.backward()
+                meta_loss += query_loss.item()
+                
+                # Restore original state, but keep the accumulated gradients
+                self.model.load_state_dict(original_state)
+            
+            # 4. Meta-update
+            optimizer.step()
+            print(f"  [MAML] Epoch {epoch+1}/{meta_epochs}, Meta Loss: {meta_loss/len(tasks):.4f}")
 
 
 # ── PPO Transfer ───────────────────────────────────────────────────────────────

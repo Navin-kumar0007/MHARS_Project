@@ -120,3 +120,42 @@ class Config:
     IF_ONLINE_RETRAIN       = True   # Toggle online Isolation Forest retraining
     IF_RETRAIN_INTERVAL     = 500    # Retrain every N samples (was 100, too frequent)
     IF_COLD_START_SAMPLES   = 50     # Skip IF pickle until online retrain fires once
+
+    # ── Phase 2: Anomaly detection damping (replaces blanket CPU/Server bypass) ──
+    # Factor ∈ (0, 1] applied to IF/AE/Vib scores per machine type.
+    # 1.0 = full score (Motors, Engines), <1.0 = damped (CPU, Server).
+    ANOMALY_DAMPING_FACTORS = {
+        0: 0.30,   # CPU  — high-frequency thermal fluctuations → heavy damping
+        1: 1.00,   # Motor — mechanical inertia → full sensitivity
+        2: 0.40,   # Server — moderate fluctuations → moderate damping
+        3: 1.00,   # Engine — heavy thermal mass → full sensitivity
+    }
+
+    # ── Phase 2: Learned Attention Fusion ─────────────────────────────────────
+    LEARNED_FUSION_MODEL = os.path.join(MODELS_DIR, 'learned_fusion.pt')
+    FUSION_D_MODEL       = 32    # embedding dimension per modality
+    FUSION_N_HEADS       = 4     # multi-head attention heads
+    FUSION_N_MODALITIES  = 6     # lstm, ae, if, cnn, audio, vibration
+
+    # ── Phase 2: RUL Prediction ──────────────────────────────────────────────
+    RUL_MODEL_V2         = os.path.join(MODELS_DIR, 'rul_predictor_v2.pt')
+    RUL_MAX_CYCLES       = 125   # piece-wise linear cap per NASA convention
+
+    # ── Phase 2: SAC Agent ───────────────────────────────────────────────────
+    SAC_MODEL            = os.path.join(MODELS_DIR, 'sac_thermal.zip')
+
+    # ── Phase 2: Enhanced Environment ────────────────────────────────────────
+    ENV_V2_OBS_DIM       = 12    # expanded observation space
+    PPO_REWARD_V2 = {
+        **PPO_REWARD,
+        "energy_efficiency_bonus": 0.1,   # reward for low fan speed while safe
+        "proactive_cooling_bonus": 0.3,   # reward for cooling before warning zone
+        "rul_penalty_scale":      -2.0,   # penalty proportional to low RUL
+        "smoothness_reward":      -0.15,  # penalize rapid fan speed oscillations
+    }
+
+    # ── Phase 3: TFT Predictor ───────────────────────────────────────────────
+    TFT_MODEL            = os.path.join(MODELS_DIR, 'tft_predictor.pt')
+    TFT_D_MODEL          = 32
+    TFT_N_HEADS          = 4
+    TFT_NUM_QUANTILES    = 3
