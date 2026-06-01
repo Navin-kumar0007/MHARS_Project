@@ -189,6 +189,14 @@ if TORCH_AVAILABLE:
             last = out[:, -1, :]
             return self.head(last).squeeze(-1)
 
+    try:
+        from stage2_ml.tft_predictor import TFTPredictor
+    except ImportError:
+        class TFTPredictor:
+            def __init__(self, *args, **kwargs):
+                raise ImportError("TFTPredictor not found in stage2_ml.")
+
+
 
 else:
     # Stub classes when torch is not installed
@@ -213,5 +221,9 @@ else:
             raise ImportError("PyTorch required: pip install torch")
 
     class RULPredictor:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch required: pip install torch")
+
+    class TFTPredictor:
         def __init__(self, *args, **kwargs):
             raise ImportError("PyTorch required: pip install torch")

@@ -283,3 +283,262 @@ class ThermalEnv(gym.Env):
             f"Action: {info['action_name']:10s} "
             f"Step: {self.step_count:4d}"
         )
+
+
+# ── Phase 2: Enhanced Thermal Environment ──────────────────────────────────────
+class ThermalEnvV2(ThermalEnv):
+    """
+    Phase 2 enhanced thermal environment with:
+    - 12-dimensional observation space (vs 6 in V1)
+    - Variable episode lengths (100–1000 steps)
+    - Correlated load spikes (multi-step sustained surges)
+    - Degradation trajectory (machine gets harder to cool over time)
+    - Continuous fan speed action + discrete emergency actions
+    - Enhanced reward with energy efficiency and proactive cooling bonuses
+    - Multi-fault injection (bearing failure + cooling loss simultaneously)
+    - Heteroscedastic sensor noise (noise scales with temperature)
+    """
+
+    metadata = {"render_modes": ["human"]}
+
+    def __init__(self, machine_type_id: int = 0, max_steps: int = None,
+                 render_mode=None, variable_episodes: bool = True):
+        # V2 uses variable episode lengths by default
+        super().__init__(machine_type_id=machine_type_id,
+                         max_steps=max_steps or 500,
+                         render_mode=render_mode)
+
+        self.variable_episodes = variable_episodes
+
+        # 12-dim observation space
+        self.observation_space = spaces.Box(
+            low=np.zeros(12, dtype=np.float32),
+            high=np.ones(12, dtype=np.float32),
+            dtype=np.float32
+        )
+
+        # Continuous fan speed (0-1) + discrete action (0-4)
+        # Action format: [fan_speed_target, discrete_action]
+        # fan_speed_target ∈ [0, 1] — continuous cooling control
+        # discrete_action: 0=nothing, 1=throttle, 2=alert, 3=shutdown
+        self.action_space = spaces.Box(
+            low=np.array([0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 3.0], dtype=np.float32),
+            dtype=np.float32
+        )
+
+        # Keep parent's discrete action space for internal physics step
+        self._discrete_action_space = spaces.Discrete(5)
+
+        # Degradation state
+        self.degradation_factor: float = 0.0  # increases over time
+        self.spike_remaining: int = 0          # sustained load spike counter
+        self.prev_fan_speed: float = 0.3       # for smoothness penalty
+        self.vib_score: float = 0.0            # synthetic vibration
+
+        # Multi-fault state
+        self.active_faults: dict = {}          # {fault_name: remaining_steps}
+
+    def reset(self, seed=None, options=None):
+        # Call parent reset (sets temp, fan_speed, load_level, etc.)
+        obs_v1, info = super().reset(seed=seed, options=options)
+
+        # Variable episode length
+        if self.variable_episodes:
+            self.max_steps = self.np_random.integers(100, 1001)
+
+        # Reset degradation
+        self.degradation_factor = 0.0
+        self.spike_remaining = 0
+        self.prev_fan_speed = self.fan_speed
+        self.vib_score = 0.0
+        self.active_faults = {}
+
+        obs = self._get_obs_v2()
+        info["max_steps"] = self.max_steps
+        return obs, info
+
+    def _inject_faults(self):
+        """
+        Multi-fault injection: simultaneous faults can co-occur.
+        Each fault has independent probability and duration.
+        """
+        profile = self.profile
+
+        # Bearing failure: generates extra friction heat, increases vibration
+        if "bearing_failure" not in self.active_faults:
+            if self.np_random.random() < 0.008:  # ~0.8% chance per step
+                duration = self.np_random.integers(10, 40)
+                self.active_faults["bearing_failure"] = duration
+        
+        # Cooling loss: fan effectiveness drops drastically
+        if "cooling_loss" not in self.active_faults:
+            if self.np_random.random() < 0.005:  # ~0.5% chance per step
+                duration = self.np_random.integers(5, 25)
+                self.active_faults["cooling_loss"] = duration
+
+        # Apply fault effects
+        fault_heat = 0.0
+        cooling_penalty = 1.0  # multiplier on effective_h
+
+        if "bearing_failure" in self.active_faults:
+            # Bearing friction adds heat proportional to load
+            fault_heat += self.load_level * profile.get("heat_rate", 2.0) * 0.4
+            self.vib_score = min(1.0, self.vib_score + 0.3)  # spike vibration
+            self.active_faults["bearing_failure"] -= 1
+            if self.active_faults["bearing_failure"] <= 0:
+                del self.active_faults["bearing_failure"]
+
+        if "cooling_loss" in self.active_faults:
+            # Cooling effectiveness drops to 30%
+            cooling_penalty = 0.3
+            self.active_faults["cooling_loss"] -= 1
+            if self.active_faults["cooling_loss"] <= 0:
+                del self.active_faults["cooling_loss"]
+
+        return fault_heat, cooling_penalty
+
+    def _heteroscedastic_noise(self, temp: float) -> float:
+        """
+        Sensor noise that scales with temperature.
+        Higher temperatures produce noisier readings (more thermal interference).
+        """
+        profile = self.profile
+        # Base noise: 0.1°C, scales up to 0.6°C near critical
+        temp_ratio = (temp - 15.0) / (profile["critical"] - 15.0 + 1e-8)
+        noise_std = 0.1 + 0.5 * max(0.0, temp_ratio)
+        return float(self.np_random.normal(0, noise_std))
+
+    def step(self, action):
+        """
+        Action is [fan_speed_target, discrete_action_float].
+        fan_speed_target: continuous [0, 1]
+        discrete_action: rounded to int, mapped to {0:nothing, 1:throttle, 2:alert, 3:shutdown}
+        """
+        fan_target = float(np.clip(action[0], 0.0, 1.0))
+        discrete = int(np.clip(np.round(action[1]), 0, 3))
+
+        # Map to V1 actions: 0=nothing, 2=throttle, 3=alert, 4=shutdown
+        v1_action_map = {0: 0, 1: 2, 2: 3, 3: 4}
+        v1_action = v1_action_map[discrete]
+
+        # Apply continuous fan speed (smooth transition)
+        self.prev_fan_speed = self.fan_speed
+        self.fan_speed = fan_target  # directly set fan speed
+
+        # Apply degradation (machine gets harder to cool over time)
+        self.degradation_factor += 0.0003  # ~0.15 total over 500 steps
+        profile = self.profile
+
+        # Correlated multi-step load spikes
+        if self.spike_remaining > 0:
+            self.spike_remaining -= 1
+        elif self.np_random.random() < 0.05:
+            # 5% chance of multi-step spike lasting 3-10 steps
+            self.spike_remaining = self.np_random.integers(3, 11)
+            self.load_level = min(1.0, self.load_level + self.np_random.uniform(0.2, 0.4))
+
+        # Multi-fault injection
+        fault_heat, cooling_penalty = self._inject_faults()
+
+        # Apply V1 step logic for discrete actions and temp dynamics
+        # Temporarily swap to discrete action space so parent's assert passes
+        saved_action_space = self.action_space
+        self.action_space = self._discrete_action_space
+        saved_fan = self.fan_speed
+        obs_v1, reward_v1, terminated, truncated, info = super().step(v1_action)
+        self.action_space = saved_action_space  # restore V2 action space
+        self.fan_speed = saved_fan  # restore continuous fan
+
+        # Apply degradation effect: reduce cooling effectiveness
+        degraded_conv = profile.get("conv_coeff", 0.06) * (1.0 - self.degradation_factor * 0.5)
+        effective_h = degraded_conv * (1.0 + self.fan_speed * 1.5) * cooling_penalty
+        ambient = 25.0
+        Q_degrade = effective_h * (self.temp - ambient) * 0.1 * self.degradation_factor
+        self.temp += Q_degrade  # extra heat from degradation
+
+        # Apply fault-induced heat
+        self.temp += fault_heat
+
+        # Apply heteroscedastic sensor noise (replaces constant noise)
+        self.temp += self._heteroscedastic_noise(self.temp)
+
+        self.temp = np.clip(self.temp, 15.0, profile["critical"] + 10.0)
+
+        # Synthetic vibration score (correlated with degradation and load)
+        base_vib = float(np.clip(
+            self.degradation_factor * 2.0 + self.load_level * 0.2 +
+            self.np_random.normal(0, 0.05), 0, 1
+        ))
+        # vib_score may already be spiked by bearing failure; take max
+        self.vib_score = max(base_vib, self.vib_score * 0.95)  # decay fault spike
+
+        # ── Enhanced reward ────────────────────────────────────────────────
+        from mhars.config import Config
+        R = Config.PPO_REWARD_V2
+
+        # Base reward from V1
+        reward = reward_v1
+
+        # Energy efficiency bonus: lower fan while staying safe
+        if self.temp < profile["safe_max"] and self.fan_speed < 0.5:
+            reward += R.get("energy_efficiency_bonus", 0.1) * (1.0 - self.fan_speed)
+
+        # Proactive cooling: bonus for cooling before reaching warning zone
+        warning_zone = profile["safe_max"] * 0.85
+        if self.temp < warning_zone and self.fan_speed > 0.3:
+            reward += R.get("proactive_cooling_bonus", 0.3) * 0.1
+
+        # Smoothness: penalize rapid fan speed changes
+        fan_delta = abs(self.fan_speed - self.prev_fan_speed)
+        if fan_delta > 0.2:
+            reward += R.get("smoothness_reward", -0.15) * fan_delta
+
+        # Use V2 observation
+        obs = self._get_obs_v2()
+        info["degradation"] = round(self.degradation_factor, 4)
+        info["vib_score"] = round(self.vib_score, 3)
+        info["active_faults"] = list(self.active_faults.keys())
+
+        return obs, reward, terminated, truncated, info
+
+    def _get_obs_v2(self) -> np.ndarray:
+        """12-dimensional observation vector."""
+        profile = self.profile
+
+        # Original 6 dims
+        temp_norm = (self.temp - 15.0) / (profile["critical"] - 15.0)
+
+        if len(self.temp_history) >= 6:
+            trend = (self.temp_history[-1] - self.temp_history[-6]) / 5.0
+            predicted = self.temp + (trend * 10)
+        else:
+            predicted = self.temp
+        pred_norm = np.clip((predicted - 15.0) / (profile["critical"] - 15.0), 0, 1)
+
+        anomaly = np.clip((self.temp - profile["idle"]) /
+                          (profile["safe_max"] - profile["idle"]), 0, 1)
+        machine_norm = self.machine_type_id / max(len(MACHINE_PROFILES) - 1, 1)
+        time_norm = np.clip(self.steps_since_action / 100.0, 0, 1)
+
+        if len(self.temp_history) >= 3:
+            rate = (self.temp_history[-1] - self.temp_history[-3]) / 2.0
+            rate_norm = np.clip(rate / 5.0, 0, 1)
+        else:
+            rate_norm = 0.0
+        urgency = np.clip(0.6 * anomaly + 0.4 * rate_norm, 0, 1)
+
+        # New 6 dims for V2
+        dT_dt = rate_norm  # rate of change (already computed)
+        load_norm = float(np.clip(self.load_level, 0, 1))
+        fan_norm = float(np.clip(self.fan_speed, 0, 1))
+        vib_norm = float(np.clip(self.vib_score, 0, 1))
+        damage_norm = float(np.clip(self.damage_accumulated / 5.0, 0, 1))
+        ambient_norm = 0.5  # placeholder (real: (ambient - 15) / 30)
+
+        obs = np.array([
+            temp_norm, pred_norm, anomaly, machine_norm, time_norm, urgency,
+            dT_dt, load_norm, fan_norm, vib_norm, damage_norm, ambient_norm,
+        ], dtype=np.float32)
+
+        return obs

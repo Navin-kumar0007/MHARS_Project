@@ -142,6 +142,17 @@ class MHARS:
         self.node_id = f"{self.machine_name}_{os.getpid()}"
         self._registry.register_node(self.node_id, self.machine_name)
 
+        # Phase 3 — Physics-Informed Causal Layer & Digital Twin
+        try:
+            from stage3_ai.causal_layer import PhysicsCausalLayer
+            self._causal_layer = PhysicsCausalLayer(self.profile)
+            
+            from stage1_simulation.digital_twin import DigitalTwin
+            self._digital_twin = DigitalTwin(self.profile)
+        except ImportError:
+            self._causal_layer = None
+            self._digital_twin = None
+
         print(f"[MHARS] Initialising for machine: {self.machine_name}")
         self._load_models(llm_path)
         print(f"[MHARS] Ready ✓\n")
@@ -215,10 +226,18 @@ class MHARS:
         else:
             print(f"  ⚠  Isolation Forest not found — skipping noise filter")
 
-        # LSTM — prefer V2 (BiLSTM+Attention), fall back to V1
+        # LSTM — prefer TFT (Phase 3), fall back to V2 (BiLSTM+Attention), fall back to V1
         self._lstm = None
-        self._lstm_version = None  # "v2" or "v1"
-        if TORCH_AVAILABLE and os.path.exists(Config.LSTM_V2):
+        self._lstm_version = None  # "tft", "v2", or "v1"
+        if TORCH_AVAILABLE and getattr(Config, 'TFT_MODEL', False) and os.path.exists(Config.TFT_MODEL):
+            from mhars.models import TFTPredictor
+            checkpoint = torch.load(Config.TFT_MODEL, map_location="cpu")
+            self._lstm = TFTPredictor(num_vars=Config.LSTM_INPUT_SIZE_V2, d_model=Config.TFT_D_MODEL, n_heads=Config.TFT_N_HEADS, num_quantiles=Config.TFT_NUM_QUANTILES)
+            self._lstm.load_state_dict(checkpoint)
+            self._lstm.eval()
+            self._lstm_version = "tft"
+            print(f"  ✓  TFT Predictor loaded (Phase 3)")
+        elif TORCH_AVAILABLE and os.path.exists(Config.LSTM_V2):
             from mhars.models import ThermalLSTMv2
             checkpoint = torch.load(Config.LSTM_V2, map_location="cpu")
             hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
@@ -239,7 +258,7 @@ class MHARS:
             self._lstm_version = "v1"
             print(f"  ✓  LSTM V1 loaded (hidden_size={hidden_size})")
         else:
-            print(f"  ⚠  LSTM not found — using linear trend prediction")
+            print(f"  ⚠  Thermal Predictor not found — using linear trend prediction")
 
         # Autoencoder — prefer V2 (LSTM-AE), fall back to V1 (linear AE)
         self._ae_model    = None
@@ -354,9 +373,52 @@ class MHARS:
         try:
             from stage2_ml.audio_mfcc import AudioPipeline
             self._audio = AudioPipeline()
-            print("  ✓  Audio MFCC Pipeline loaded")
+            print(f"  ✓  Audio MFCC Pipeline loaded")
         except Exception as e:
             print(f"  ⚠  Audio MFCC Pipeline not found: {e}")
+
+        # Phase 2: Learned Attention Fusion
+        self._learned_fusion = None
+        if TORCH_AVAILABLE and os.path.exists(Config.LEARNED_FUSION_MODEL):
+            try:
+                from mhars.learned_fusion import LearnedAttentionFusion
+                self._learned_fusion = LearnedAttentionFusion(
+                    n_modalities=Config.FUSION_N_MODALITIES,
+                    d_model=Config.FUSION_D_MODEL,
+                    n_heads=Config.FUSION_N_HEADS,
+                )
+                self._learned_fusion.load_state_dict(
+                    torch.load(Config.LEARNED_FUSION_MODEL, map_location="cpu"))
+                self._learned_fusion.eval()
+                print(f"  ✓  Learned Attention Fusion loaded")
+            except Exception as e:
+                print(f"  ⚠  Learned Fusion load failed: {e}")
+        else:
+            print(f"  ⚠  Learned Fusion not found — using rule-based fusion")
+
+        # Phase 2: RUL Predictor V2
+        self._rul_model = None
+        if TORCH_AVAILABLE and os.path.exists(Config.RUL_MODEL_V2):
+            try:
+                from mhars.models import RULPredictor
+                checkpoint = torch.load(Config.RUL_MODEL_V2, map_location="cpu")
+                self._rul_model = RULPredictor()
+                self._rul_model.load_state_dict(checkpoint)
+                self._rul_model.eval()
+                print(f"  ✓  RUL Predictor V2 loaded")
+            except Exception as e:
+                print(f"  ⚠  RUL Predictor V2 load failed: {e}")
+
+        # Phase 2: SAC Agent
+        self._sac = None
+        sac_path = Config.SAC_MODEL.replace(".zip", "")
+        if os.path.exists(sac_path + ".zip") or os.path.exists(sac_path):
+            try:
+                from stable_baselines3 import SAC as SB3SAC
+                self._sac = SB3SAC.load(sac_path)
+                print(f"  ✓  SAC agent loaded")
+            except Exception as e:
+                print(f"  ⚠  SAC failed to load: {e}")
 
     # ── Main pipeline ──────────────────────────────────────────────────────────
     def run(self, temp_celsius: Union[float, 'SensorReading'] = None,
@@ -495,7 +557,7 @@ class MHARS:
 
         # Step 7 — PPO action
         obs    = self._build_obs(temp_norm, lstm_pred_norm, ae_score, urgency)
-        action = self._decide(obs, temp_celsius_val)
+        action = self._decide(obs, temp_celsius_val, sr)
 
         latency_ms = (time.perf_counter() - t0) * 1000
 
@@ -547,15 +609,24 @@ class MHARS:
 
 
         # Step 8 — LLM alert
+        # Phase 3 — Causal Reasoning
+        causal_reasoning = "Normal operation"
+        if hasattr(self, '_causal_layer') and self._causal_layer is not None:
+            # Simple assumption: 0 fan speed if not throttling, else 1
+            current_fan = 1.0 if action in ["fan+", "throttle"] else 0.0
+            causal_res = self._causal_layer.analyze(temp_celsius_val, sr.load_pct, current_fan)
+            causal_reasoning = causal_res["root_cause_hypothesis"]
+
         alert_ctx = {
-            "machine_type":   self.machine_name,
-            "current_temp":   temp_celsius_val,
-            "predicted_temp": lstm_pred_celsius,
-            "anomaly_score":  ae_score,
-            "action_name":    action,
-            "urgency":        urgency,
-            "load_pct":       sr.load_pct,
-            "dT_dt":          sr.dT_dt,
+            "machine_type":     self.machine_name,
+            "current_temp":     temp_celsius_val,
+            "predicted_temp":   lstm_pred_celsius,
+            "anomaly_score":    ae_score,
+            "action_name":      action,
+            "urgency":          urgency,
+            "load_pct":         sr.load_pct,
+            "dT_dt":            sr.dT_dt,
+            "causal_reasoning": causal_reasoning,
         }
         
         if route == "edge":
@@ -660,10 +731,10 @@ class MHARS:
         return [s2, s3, s4, s7, s11]
 
     def _compute_if_score(self, temp_norm: float) -> float:
-        # CPUs have highly erratic temperature jumps based on load.
-        # Isolation Forest is tuned for smoother mechanical thermal mass.
-        if self.machine_type_id in [0, 2]:
-            return 0.0
+        # Phase 2: Per-machine damping replaces blanket CPU/Server bypass.
+        # All machine types now get anomaly detection, with sensitivity damping
+        # for erratic thermal profiles (CPU, Server).
+        damping = Config.ANOMALY_DAMPING_FACTORS.get(self.machine_type_id, 1.0)
             
         # Cold-start bypass: skip the pickle-loaded IF until online retrain has fired.
         # The pickle was trained on CMAPSS multi-sensor data, not our 5-feature vector.
@@ -685,7 +756,7 @@ class MHARS:
             feat = np.array([[temp_norm, temp_norm, temp_norm, 0.0, 0.0]])
         raw = self._if_model.decision_function(feat)[0]
         score = -raw
-        return float(np.clip(score, 0, 1))
+        return float(np.clip(score * damping, 0, 1))
 
     def _retrain_if(self):
         """Issue 5 — Online Isolation Forest retraining from rolling buffer.
@@ -716,7 +787,25 @@ class MHARS:
             # Not enough history yet — use linear trend
             pred_norm = temp_norm + 0.01
         elif self._lstm is not None and TORCH_AVAILABLE:
-            if self._lstm_version == "v2" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
+            if self._lstm_version == "tft" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
+                # Phase 3: TFT multivariate input (batch, 12, 5)
+                multi_window = list(self._multi_sensor_window)
+                x = torch.FloatTensor([multi_window])  # (1, 12, 5)
+                with torch.no_grad():
+                    quantiles, var_w, attn_w = self._lstm(x)
+                    # Quantiles: [p10, p50, p90]
+                    p10 = float(quantiles[:, 0].item())
+                    pred_norm = float(quantiles[:, 1].item())
+                    p90 = float(quantiles[:, 2].item())
+                
+                # Built-in interval from TFT
+                prediction_interval = {
+                    "lower": round(self._denormalize_temp(p10), 2),
+                    "upper": round(self._denormalize_temp(p90), 2),
+                    "width_celsius": round((p90 - p10) * (self.profile["critical"] - 15.0), 2),
+                    "quantile": 0.80, # p90 - p10 coverage
+                }
+            elif self._lstm_version == "v2" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
                 # V2: multivariate BiLSTM+Attention input (batch, 12, 5)
                 multi_window = list(self._multi_sensor_window)
                 x = torch.FloatTensor([multi_window])  # (1, 12, 5)
@@ -728,8 +817,8 @@ class MHARS:
                 with torch.no_grad():
                     pred_norm = float(self._lstm(x).item())
 
-            # Conformal prediction interval
-            if self._conformal is not None and self._conformal.is_calibrated:
+            # Conformal prediction interval (only if TFT is not used)
+            if self._lstm_version != "tft" and self._conformal is not None and self._conformal.is_calibrated:
                 interval = self._conformal.predict_interval(pred_norm)
                 prediction_interval = {
                     "lower": round(self._denormalize_temp(interval["lower"]), 2),
@@ -753,9 +842,8 @@ class MHARS:
         return pred_norm, lstm_score, prediction_interval, conformal_boost
 
     def _compute_ae_score(self) -> float:
-        # AE model is trained on Motor thermal inertia. CPU temps are too dynamic.
-        if self.machine_type_id in [0, 2]:
-            return 0.0
+        # Phase 2: Per-machine damping replaces blanket CPU/Server bypass.
+        damping = Config.ANOMALY_DAMPING_FACTORS.get(self.machine_type_id, 1.0)
             
         if self._ae_version == "v2":
             # V2: LSTM-AE with multivariate sequence input (batch, 12, 5)
@@ -766,7 +854,7 @@ class MHARS:
             with torch.no_grad():
                 err = self._ae_model.reconstruction_error(x).item()
             score = err / (self._ae_threshold + 1e-8)
-            return float(np.clip(score, 0, 1))
+            return float(np.clip(score * damping, 0, 1))
         else:
             # V1: univariate linear AE (batch, 12)
             window = list(self._temp_window)
@@ -776,15 +864,7 @@ class MHARS:
             with torch.no_grad():
                 err = self._ae_model.reconstruction_error(x).item()
             score = err / (self._ae_threshold + 1e-8)
-            return float(np.clip(score, 0, 1))
-        window = list(self._temp_window)
-        if len(window) < Config.LSTM_WINDOW or self._ae_model is None or not TORCH_AVAILABLE:
-            return 0.2  # default low score when not enough data
-        x = torch.FloatTensor(window).unsqueeze(0)
-        with torch.no_grad():
-            err = self._ae_model.reconstruction_error(x).item()
-        score = err / (self._ae_threshold + 1e-8)
-        return float(np.clip(score, 0, 1))
+            return float(np.clip(score * damping, 0, 1))
 
 
     def _compute_vib_score(self, temp_norm: float) -> float:
@@ -793,10 +873,8 @@ class MHARS:
         In a real deployment, these features would come from an accelerometer.
         Here we derive them from temperature dynamics (correlated physics model).
         """
-        # CPUs and Servers don't experience the same physical vibration as Motors/Engines.
-        # Skip vibration anomaly detection for these types.
-        if self.machine_type_id in [0, 2]:
-            return 0.0
+        # Phase 2: Per-machine damping replaces blanket CPU/Server bypass.
+        damping = Config.ANOMALY_DAMPING_FACTORS.get(self.machine_type_id, 1.0)
 
         if self._vib_model is None:
             # Fallback: estimate vibration from temperature trend
@@ -831,33 +909,43 @@ class MHARS:
         with torch.no_grad():
             error = self._vib_model.reconstruction_error(x).item()
         score = error / (self._vib_threshold + 1e-8)
-        return float(np.clip(score, 0, 1))
+        return float(np.clip(score * damping, 0, 1))
 
     def _fuse(self, lstm_score, ae_score, if_score,
               cnn_score=0.5, audio_score=0.5, vib_score=0.3,
               cnn_var=None, audio_var=None):
-        """6-modality attention fusion (#10 fix: CNN and vibration are now separate)."""
+        """6-modality attention fusion.
+        
+        Phase 2: Uses learned neural attention when model is available,
+        falls back to hand-coded inverse-variance weighting otherwise.
+        """
+        scores_np = np.array([lstm_score, ae_score, if_score,
+                              cnn_score, audio_score, vib_score], dtype=np.float32)
+
+        # Phase 2: Use learned fusion if available
+        if self._learned_fusion is not None and TORCH_AVAILABLE:
+            context, contributions, top_contributor = self._learned_fusion.fuse_with_xai(scores_np)
+            return context, contributions, top_contributor
+
+        # Fallback: hand-coded inverse-variance weighting
         def w(var):
             return 1.0 if var is None else 1.0 / (1.0 + var)
 
-        scores  = np.array([lstm_score, ae_score, if_score,
-                             cnn_score, audio_score, vib_score], dtype=np.float32)
         weights = np.array([1.0, 1.0, 1.0, w(cnn_var), w(audio_var), 1.0],
                             dtype=np.float32)
         weights /= weights.sum() + 1e-8
 
-        context = float(np.clip(np.dot(weights, scores), 0, 1))
+        context = float(np.clip(np.dot(weights, scores_np), 0, 1))
         
         # XAI Contributions
-        # Prevent division by zero if all scores are 0
-        total_impact = np.dot(weights, scores) + 1e-8
+        total_impact = np.dot(weights, scores_np) + 1e-8
         contributions = {
-            "trend_forecast": round(float(weights[0] * scores[0] / total_impact) * 100),
-            "pattern_check":  round(float(weights[1] * scores[1] / total_impact) * 100),
-            "outlier_scan":   round(float(weights[2] * scores[2] / total_impact) * 100),
-            "cnn_hotspot":    round(float(weights[3] * scores[3] / total_impact) * 100),
-            "audio":          round(float(weights[4] * scores[4] / total_impact) * 100),
-            "vibration":      round(float(weights[5] * scores[5] / total_impact) * 100),
+            "trend_forecast": round(float(weights[0] * scores_np[0] / total_impact) * 100),
+            "pattern_check":  round(float(weights[1] * scores_np[1] / total_impact) * 100),
+            "outlier_scan":   round(float(weights[2] * scores_np[2] / total_impact) * 100),
+            "cnn_hotspot":    round(float(weights[3] * scores_np[3] / total_impact) * 100),
+            "audio":          round(float(weights[4] * scores_np[4] / total_impact) * 100),
+            "vibration":      round(float(weights[5] * scores_np[5] / total_impact) * 100),
         }
         top_contributor = max(contributions, key=contributions.get) if context > 0.05 else "none"
 
@@ -882,7 +970,7 @@ class MHARS:
             urgency,
         ], dtype=np.float32)
 
-    def _decide(self, obs: np.ndarray, current_temp_raw: float) -> str:
+    def _decide(self, obs: np.ndarray, current_temp_raw: float, sr: 'SensorReading' = None) -> str:
         # HARDWARE SAFETY OVERRIDE:
         # RL agents are prone to out-of-distribution failure.
         # In real-world industrial systems, a strict rule-based
@@ -895,27 +983,54 @@ class MHARS:
 
         if self._ppo is not None:
             action_id, _ = self._ppo.predict(obs, deterministic=True)
-            return Config.ACTIONS[int(action_id)]
-        
-        # Rule-based fallback when PPO not loaded
-        temp_norm = obs[0]
-        urgency   = obs[5]
-        if urgency > 0.7:
-            return "fan+"
-        elif urgency > 0.5:
-            return "throttle"
-        elif urgency > 0.35:
-            return "alert"
-        return "do-nothing"
+            proposed_action = Config.ACTIONS[int(action_id)]
+        else:
+            # Rule-based fallback when PPO not loaded
+            temp_norm = obs[0]
+            urgency   = obs[5]
+            if urgency > 0.7:
+                proposed_action = "fan+"
+            elif urgency > 0.5:
+                proposed_action = "throttle"
+            elif urgency > 0.35:
+                proposed_action = "alert"
+            else:
+                proposed_action = "do-nothing"
+                
+        # Phase 3 — Digital Twin Safety Check
+        if hasattr(self, '_digital_twin') and self._digital_twin is not None and sr is not None:
+            # Estimate current fan speed (0.0 if not cooling, 1.0 if cooling) for simulation
+            current_fan = 1.0 if proposed_action in ["fan+", "throttle"] else 0.0
+            # Predict next 5 seconds
+            trajectory = self._digital_twin.simulate_what_if(
+                current_temp_raw, sr.load_pct, current_fan, [proposed_action], steps_per_action=5
+            )
+            # If the proposed action leads to critical failure in the next 5 seconds, override
+            if any(t >= p["critical"] for t in trajectory):
+                return "emergency-shutdown"
+            elif any(t >= p["safe_max"] for t in trajectory) and proposed_action not in ["fan+", "throttle", "shutdown"]:
+                return "throttle"
+                
+        return proposed_action
 
     def _estimate_rul(self, current_temp: float, predicted_temp: float, safe_max: float) -> Optional[float]:
         """Estimate remaining useful life in minutes before hitting safe_max.
         
-        The LSTM predicts Config.LSTM_PREDICTION_HORIZON_S seconds ahead.
-        delta_per_step is °C per that horizon, so:
-            RUL (seconds) = remaining_degrees / delta_per_step * horizon_s
-            RUL (minutes) = RUL (seconds) / 60
+        Phase 2: Uses learned RUL predictor when available (predicts cycles-to-failure
+        from multivariate sensor window). Falls back to linear temperature extrapolation.
         """
+        # Phase 2: Learned RUL predictor
+        if self._rul_model is not None and TORCH_AVAILABLE:
+            multi_window = list(self._multi_sensor_window)
+            if len(multi_window) >= Config.LSTM_WINDOW:
+                x = torch.FloatTensor([multi_window])  # (1, 12, 5)
+                with torch.no_grad():
+                    rul_cycles = float(self._rul_model(x).item())
+                # Convert cycles to minutes (at 1Hz sampling, 1 cycle ≈ 1 second)
+                rul_minutes = max(0.0, rul_cycles) / 60.0
+                return round(min(rul_minutes, 999.0), 1)
+
+        # Fallback: linear temperature extrapolation
         horizon_s = Config.LSTM_PREDICTION_HORIZON_S
         delta_per_step = predicted_temp - current_temp  # °C per horizon
         if delta_per_step <= 0:
