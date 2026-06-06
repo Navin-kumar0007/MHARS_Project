@@ -19,6 +19,12 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Union
 from collections import deque
 
+from mhars.health_score import HealthScoreEngine
+from mhars.trend_analyzer import TrendAnalyzer
+from mhars.explainability import ExplainabilityEngine
+from mhars.maintenance_scheduler import MaintenanceScheduler
+from stage2_ml.mc_dropout import MCDropoutEstimator
+
 
 class _NumpySafeEncoder(json.JSONEncoder):
     """JSON encoder that handles numpy types (Issue #35)."""
@@ -141,6 +147,14 @@ class MHARS:
         self._registry = AgentRegistry()
         self.node_id = f"{self.machine_name}_{os.getpid()}"
         self._registry.register_node(self.node_id, self.machine_name)
+
+        # Phase 4B — New Engines
+        self._health_engine = HealthScoreEngine(self.profile)
+        # Target mean is roughly normalized operating temp (e.g. 0.5)
+        self._trend_analyzer = TrendAnalyzer(target_mean=0.5, std_dev=0.15)
+        self._xai_engine = ExplainabilityEngine()
+        self._maintenance_scheduler = MaintenanceScheduler(self.profile)
+        self._mc_dropout = MCDropoutEstimator(num_samples=20)
 
         # Phase 3 — Physics-Informed Causal Layer & Digital Twin
         try:
@@ -538,6 +552,22 @@ class MHARS:
             audio_var   = audio_var,
         )
 
+        # Enhance top_contributor with XAI gradient attribution if applicable
+        feature_importance = {}
+        if top_contributor == "pattern_check" and self._ae_model is not None and TORCH_AVAILABLE:
+            try:
+                # Need the tensor input again
+                x = torch.FloatTensor([list(self._multi_sensor_window)]) if self._ae_version == "v2" else torch.FloatTensor(list(self._temp_window)).unsqueeze(0)
+                feature_importance = self._xai_engine.compute_attribution(self._ae_model, x)
+            except Exception as e:
+                self.logger.warning(f"XAI Attribution failed for AE: {e}")
+        elif top_contributor == "trend_forecast" and self._lstm is not None and TORCH_AVAILABLE:
+             try:
+                x = torch.FloatTensor([list(self._multi_sensor_window)]) if self._lstm_version in ["v2", "tft"] else torch.FloatTensor(list(self._temp_window)).unsqueeze(0).unsqueeze(-1)
+                feature_importance = self._xai_engine.compute_attribution(self._lstm, x)
+             except Exception as e:
+                 self.logger.warning(f"XAI Attribution failed for LSTM: {e}")
+
         # Step 5.2 — Base urgency driven by prediction proximity to critical threshold
         base_urgency = (lstm_pred_celsius - 25.0) / (self.profile["critical"] - 25.0)
         base_urgency = max(0.0, base_urgency)
@@ -570,8 +600,23 @@ class MHARS:
             0 if action != "do-nothing" else self._steps_since_action + 1
         )
         
-        # Step 7.5 — Estimate RUL
+        # Step 7.5 — Estimate RUL & Advanced Analytics
         rul_minutes = self._estimate_rul(temp_celsius_val, lstm_pred_celsius, self.profile["safe_max"])
+        
+        # Trend Analysis
+        trend_stats = self._trend_analyzer.update(temp_norm)
+        drift_detected = trend_stats["is_drifting"]
+        
+        # Health Score & Maintenance Schedule
+        health_data = self._health_engine.compute(
+            current_temp=temp_celsius_val,
+            anomaly_score=ae_score,
+            rul_minutes=rul_minutes,
+            vib_score=vib_score,
+            drift_detected=drift_detected
+        )
+        
+        maintenance_plan = self._maintenance_scheduler.schedule(rul_minutes, health_data["score"])
 
         # Create Result object first
         result = MHARSResult(
@@ -594,7 +639,13 @@ class MHARS:
                 "cnn_score": cnn_score, "audio_score": audio_score,
                 "context_score": context, "rul_minutes": rul_minutes,
                 "contributions": contributions, "top_contributor": top_contributor,
+                "feature_importance": feature_importance,
                 "fault_type": fault_type,
+                "health_score": health_data["score"],
+                "health_trend": health_data["trend"],
+                "health_breakdown": health_data["breakdown"],
+                "maintenance_plan": maintenance_plan,
+                "trend_stats": trend_stats,
                 "features": sr.to_feature_vector(),
                 "urgency_confidence": round(urgency_confidence, 3),
                 "urgency_variance": round(urgency_variance, 4),
@@ -655,21 +706,6 @@ class MHARS:
         import dataclasses
         log_entry = dataclasses.asdict(result)
         self.logger.info(json.dumps(log_entry, cls=_NumpySafeEncoder))
-
-        # Issue 5 — Data Drift Detection
-        drift_detected = False
-        if hasattr(self, '_ae_score_history'):
-            self._ae_score_history.append(ae_score)
-            if len(self._ae_score_history) == self._ae_score_history.maxlen:
-                median_ae = np.median(self._ae_score_history)
-                # Configurable threshold, default 0.3 for warning
-                drift_threshold = 0.3
-                if median_ae > drift_threshold:
-                    drift_detected = True
-                    self.logger.warning(
-                        json.dumps({"event": "concept_drift_detected", "median_ae_score": median_ae, 
-                                    "message": f"Possible concept drift detected (median AE score {median_ae:.3f} > {drift_threshold}). Consider retraining the Autoencoder."})
-                    )
 
         # Update heartbeat (throttled to every 30s — #17)
         now = time.time()
@@ -817,6 +853,20 @@ class MHARS:
                 with torch.no_grad():
                     pred_norm = float(self._lstm(x).item())
 
+            # Epistemic Uncertainty via MC Dropout
+            if self._lstm_version in ["v1", "v2"]:
+                 mc_input = torch.FloatTensor([list(self._multi_sensor_window)]) if self._lstm_version == "v2" else torch.FloatTensor(window).unsqueeze(0).unsqueeze(-1)
+                 mc_res = self._mc_dropout.predict_with_uncertainty(self._lstm, mc_input)
+                 # Only use prediction interval from MCD if conformal isn't available
+                 if self._conformal is None or not self._conformal.is_calibrated:
+                      prediction_interval = {
+                          "lower": round(self._denormalize_temp(mc_res["lower_bound"]), 2),
+                          "upper": round(self._denormalize_temp(mc_res["upper_bound"]), 2),
+                          "width_celsius": round((mc_res["upper_bound"] - mc_res["lower_bound"]) * (self.profile["critical"] - 15.0), 2),
+                          "quantile": 0.95,
+                          "confidence_score": mc_res["confidence"]
+                      }
+                      
             # Conformal prediction interval (only if TFT is not used)
             if self._lstm_version != "tft" and self._conformal is not None and self._conformal.is_calibrated:
                 interval = self._conformal.predict_interval(pred_norm)

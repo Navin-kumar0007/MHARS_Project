@@ -40,6 +40,8 @@ from starlette.concurrency import run_in_threadpool
 from mhars.core import MHARS
 from mhars.system_health import SystemHealthMonitor
 from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
+from mhars.share_links import ShareLinkManager
+from mhars.report_generator import ReportGenerator
 
 app = FastAPI(
     title="MHARS API",
@@ -57,40 +59,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Authentication ─────────────────────────────────────────────────────────────
-# Set MHARS_API_KEY environment variable to enable API key protection.
-# Set MHARS_REQUIRE_AUTH=true to strictly enforce authentication.
-MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "")
-MHARS_REQUIRE_AUTH = os.environ.get("MHARS_REQUIRE_AUTH", "false").lower() == "true"
-MHARS_SYNTHETIC_MODE = os.environ.get("MHARS_SYNTHETIC_MODE", "false").lower() == "true"
+share_manager = ShareLinkManager()
 
-async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
-    """Verify API key for HTTP routes.
-    
-    Fix #12: Simplified, consistent logic:
-    - If MHARS_API_KEY is set, it is ALWAYS checked (whether required or optional).
-    - If MHARS_REQUIRE_AUTH is true and no key is configured, it's a server error.
-    """
-    if MHARS_REQUIRE_AUTH and not MHARS_API_KEY:
-        raise HTTPException(status_code=500, detail="Server misconfiguration: MHARS_REQUIRE_AUTH is true but MHARS_API_KEY is not set.")
-    
-    if MHARS_API_KEY:
-        # Key is configured: always validate if a key is provided OR if auth is required
-        if not api_key:
-            if MHARS_REQUIRE_AUTH:
-                raise HTTPException(status_code=403, detail="API key required (X-API-Key header)")
-            return  # No key provided, not required, pass through
-        if api_key != MHARS_API_KEY:
-            raise HTTPException(status_code=403, detail="Invalid API key")
+from mhars.auth import authenticate_user, create_access_token, decode_access_token, get_user, ACCESS_TOKEN_EXPIRE_MINUTES
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from datetime import timedelta
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+    username: str = payload.get("sub")
+    if username is None:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+    user = get_user(username)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+def require_role(allowed_roles: list[str]):
+    async def role_checker(current_user: dict = Depends(get_current_user)):
+        if current_user["role"] not in allowed_roles and current_user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Operation not permitted")
+        return current_user
+    return role_checker
+
+@app.post("/api/auth/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user["username"], "role": user["role"]}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer", "role": user["role"]}
+
+@app.get("/api/auth/me")
+async def read_users_me(current_user: dict = Depends(get_current_user)):
+    return current_user
 
 def verify_ws_token(token: str) -> bool:
-    """Verify API key for WebSocket connections (via query param)."""
-    if MHARS_REQUIRE_AUTH:
-        if not MHARS_API_KEY: return False
-        return token == MHARS_API_KEY
-    if MHARS_API_KEY and token:
-        return token == MHARS_API_KEY
-    return True
+    """Verify JWT token for WebSocket connections."""
+    payload = decode_access_token(token)
+    return payload is not None
 
 @app.on_event("startup")
 async def startup_event():
@@ -296,7 +310,7 @@ async def get_system_status():
     }
 
 
-@app.post("/api/inject_anomaly", dependencies=[Depends(verify_api_key)])
+@app.post("/api/inject_anomaly", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def inject_anomaly(req: AnomalyRequest):
     """Inject one of 5 anomaly types for live demonstration."""
     # Rate limiting (#13)
@@ -327,7 +341,7 @@ async def inject_anomaly(req: AnomalyRequest):
     }
 
 
-@app.post("/api/switch_machine", dependencies=[Depends(verify_api_key)])
+@app.post("/api/switch_machine", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def switch_machine(req: MachineRequest):
     """Switch to a different machine type. Reinitializes the entire AI pipeline."""
     if req.machine_type_id not in MACHINE_PROFILES:
@@ -344,7 +358,7 @@ async def switch_machine(req: MachineRequest):
     }
 
 
-@app.post("/api/reset", dependencies=[Depends(verify_api_key)])
+@app.post("/api/reset", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def reset_system():
     """Reset the environment to idle state without changing machine type."""
     state.env.reset()
@@ -368,7 +382,7 @@ async def get_alert_history():
     return {"alerts": list(state.alert_history)}
 
 
-@app.post("/api/toggle_mode", dependencies=[Depends(verify_api_key)])
+@app.post("/api/toggle_mode", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def toggle_mode():
     """Toggle between live hardware mode and simulation demo mode."""
     state.live_mode = not state.live_mode
@@ -406,6 +420,65 @@ async def get_system_health():
 async def get_registry():
     """Return the list of all registered nodes in the federated network."""
     return state.mhars._registry.list_all_nodes()
+
+
+# ── Share Links Endpoints ──────────────────────────────────────────────────────
+class ShareLinkRequest(BaseModel):
+    label: str
+    expires_in_hours: int = 24
+
+@app.post("/api/share/create", dependencies=[Depends(require_role(["admin", "operator"]))])
+async def create_share_link(req: ShareLinkRequest, current_user: dict = Depends(get_current_user)):
+    """Create a new public share link."""
+    try:
+        token = share_manager.create_link(current_user["sub"], req.label, req.expires_in_hours)
+        return {"status": "success", "token": token}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/share/list", dependencies=[Depends(require_role(["admin", "operator"]))])
+async def list_share_links(current_user: dict = Depends(get_current_user)):
+    """List all active share links."""
+    links = share_manager.list_links()
+    # Operators can only see their own links
+    if current_user["role"] == "operator":
+        links = [link for link in links if link.get("creator") == current_user["sub"]]
+    return {"status": "success", "links": links}
+
+@app.post("/api/share/revoke/{token}", dependencies=[Depends(require_role(["admin", "operator"]))])
+async def revoke_share_link(token: str, current_user: dict = Depends(get_current_user)):
+    """Revoke a share link."""
+    # Ensure they own it or are admin
+    links = share_manager.list_links()
+    link_data = next((l for l in links if l["token"] == token), None)
+    
+    if not link_data:
+         raise HTTPException(status_code=404, detail="Link not found")
+         
+    if current_user["role"] != "admin" and link_data["creator"] != current_user["sub"]:
+        raise HTTPException(status_code=403, detail="Cannot revoke another user's link")
+        
+    if share_manager.revoke_link(token):
+        return {"status": "success", "message": "Link revoked."}
+    raise HTTPException(status_code=404, detail="Link not found")
+
+@app.get("/api/share/validate/{token}")
+async def validate_share_link(token: str):
+    """Validate a public share token (unauthenticated endpoint)."""
+    is_valid = share_manager.validate_and_record_access(token)
+    if is_valid:
+        return {"status": "success", "valid": True}
+    raise HTTPException(status_code=401, detail="Invalid or expired link")
+
+
+# ── Report Generation ──────────────────────────────────────────────────────────
+from fastapi.responses import HTMLResponse
+
+@app.get("/api/report/html", dependencies=[Depends(require_role(["admin", "operator", "viewer"]))])
+async def get_html_report():
+    """Generates a downloadable HTML diagnostic report."""
+    html_content = ReportGenerator.generate_html_report(state)
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 # ── WebSocket Telemetry Stream ─────────────────────────────────────────────────
