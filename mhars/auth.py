@@ -1,6 +1,8 @@
 import os
 import json
 import time
+import secrets
+import warnings
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from passlib.context import CryptContext
@@ -8,19 +10,27 @@ from jose import JWTError, jwt
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Secret key for JWT signing. In production (MHARS_REQUIRE_AUTH=true) a strong
-# secret MUST be supplied via MHARS_JWT_SECRET — the default dev key is rejected
-# so tokens cannot be forged by anyone who has read the source.
-_DEFAULT_DEV_SECRET = "***REDACTED_DEV_SECRET***"
-SECRET_KEY = os.environ.get("MHARS_JWT_SECRET", _DEFAULT_DEV_SECRET)
 
 def _auth_required() -> bool:
     return os.environ.get("MHARS_REQUIRE_AUTH", "false").strip().lower() in ("1", "true", "yes", "on")
 
-if _auth_required() and SECRET_KEY == _DEFAULT_DEV_SECRET:
-    raise RuntimeError(
-        "MHARS_REQUIRE_AUTH is enabled but MHARS_JWT_SECRET is unset. "
-        "Set a strong random MHARS_JWT_SECRET before running in production."
+
+# JWT signing secret. NEVER hard-coded — a committed secret can be read from the
+# repo and used to forge tokens. Production MUST supply a strong MHARS_JWT_SECRET.
+# When unset in dev, we generate an ephemeral random key per process (tokens do
+# not survive a restart, which is fine for local development).
+SECRET_KEY = os.environ.get("MHARS_JWT_SECRET")
+if not SECRET_KEY:
+    if _auth_required():
+        raise RuntimeError(
+            "MHARS_REQUIRE_AUTH is enabled but MHARS_JWT_SECRET is unset. "
+            "Set a strong random MHARS_JWT_SECRET before running in production."
+        )
+    SECRET_KEY = secrets.token_urlsafe(48)
+    warnings.warn(
+        "MHARS_JWT_SECRET is unset — using an ephemeral per-process dev key. "
+        "Tokens will be invalidated on restart. Set MHARS_JWT_SECRET for stable/production use.",
+        RuntimeWarning,
     )
 
 ALGORITHM = "HS256"
