@@ -217,6 +217,7 @@ class SystemState:
 
         # Live mode: read real hardware temp instead of simulation
         self.live_mode: bool = False
+        self._live_temp_ema: Optional[float] = None  # thermal-mass smoothing of load-driven temp
 
     @property
     def machine_profile(self) -> Dict[str, Any]:
@@ -542,6 +543,7 @@ async def toggle_mode():
     # When switching to live, reinit MHARS as CPU (the actual machine)
     if state.live_mode:
         state.reinitialize(0)  # CPU profile for real computer
+    state._live_temp_ema = None  # reset thermal smoothing on mode change
     state.action_history.clear()
     state.alert_history.clear()
     state.telemetry_history.clear()
@@ -736,19 +738,27 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
         while True:
             # ── Step 1: Get temperature ────────────────────────────────────
             if state.live_mode:
-                # LIVE MODE: read real hardware CPU temperature
-                current_temp = read_hardware_temp()
-                # Build SensorReading with real hardware context
-                from mhars.schemas import SensorReading
-                # Fix #8: Guard psutil call behind PSUTIL_AVAILABLE
+                # LIVE MODE — real-data path (Apple Silicon exposes no CPU temp
+                # sensor, so temperature is a TRANSPARENT thermal model of the
+                # machine's REAL CPU load). Inputs (load/RAM/etc) are real psutil.
                 if PSUTIL_AVAILABLE:
                     cpu_pct = psutil.cpu_percent(interval=0) / 100.0
                 else:
                     cpu_pct = 0.5
+                # Thermal model: idle ~42°C → full-load ~88°C, driven by real load.
+                target_temp = 42.0 + cpu_pct * 46.0
+                # Thermal mass: first-order lag (EMA) so temp ramps/settles like a
+                # real chip instead of jumping with instantaneous CPU% spikes.
+                if state._live_temp_ema is None:
+                    state._live_temp_ema = target_temp
+                else:
+                    state._live_temp_ema += 0.15 * (target_temp - state._live_temp_ema)
+                current_temp = round(state._live_temp_ema, 2)
+                from mhars.schemas import SensorReading
                 sr = SensorReading(
                     temp_c=current_temp,
                     load_pct=cpu_pct,
-                    ambient_c=25.0,  # could be from external sensor
+                    ambient_c=25.0,
                 )
             else:
                 # DEMO MODE: simulated environment + anomaly injection
