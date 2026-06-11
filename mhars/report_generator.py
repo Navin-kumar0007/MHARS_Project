@@ -23,23 +23,26 @@ class ReportGenerator:
         history = list(state.telemetry_history)
         if history:
             latest = history[-1]
-            health_score = latest.get("health_score", 0)
+            # Advanced analytics live in the metadata sub-dict of the telemetry payload.
+            meta = latest.get("metadata", {}) or {}
+            health_score = meta.get("health_score", 0)
             status_color = "#10b981" if health_score >= 70 else "#f59e0b" if health_score >= 40 else "#ef4444"
             status_text = "Healthy" if health_score >= 70 else "Warning" if health_score >= 40 else "Critical"
-            
-            rul = latest.get("rul_minutes", "N/A")
+
+            rul = meta.get("rul_minutes", "N/A")
             rul_text = f"{rul} mins" if isinstance(rul, (int, float)) else str(rul)
-            
-            fault_type = latest.get("fault_type", "None detected")
-            
+
+            fault_type = meta.get("fault_type", "None detected")
+
             # Sub-scores
-            breakdown = latest.get("health_breakdown", {})
+            breakdown = meta.get("health_breakdown", {})
             thermal_score = breakdown.get("thermal", "N/A")
             mech_score = breakdown.get("mechanical", "N/A")
-            
+
         else:
             health_score, status_color, status_text, rul_text, fault_type = 0, "#ef4444", "Unknown", "N/A", "Unknown"
             thermal_score, mech_score = "N/A", "N/A"
+            rul = "N/A"
             
         # Recent Alerts
         alerts_html = ""

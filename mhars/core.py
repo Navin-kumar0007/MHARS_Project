@@ -243,6 +243,8 @@ class MHARS:
         # LSTM — prefer TFT (Phase 3), fall back to V2 (BiLSTM+Attention), fall back to V1
         self._lstm = None
         self._lstm_version = None  # "tft", "v2", or "v1"
+        self._lstm_horizon = 1      # P1.5: multi-horizon forecast length
+        self._last_forecast_traj = None  # normalized forward trajectory (t+1…t+H)
         if TORCH_AVAILABLE and getattr(Config, 'TFT_MODEL', False) and os.path.exists(Config.TFT_MODEL):
             from mhars.models import TFTPredictor
             checkpoint = torch.load(Config.TFT_MODEL, map_location="cpu")
@@ -256,11 +258,13 @@ class MHARS:
             checkpoint = torch.load(Config.LSTM_V2, map_location="cpu")
             hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
             input_size = checkpoint["lstm.weight_ih_l0"].shape[1]
-            self._lstm = ThermalLSTMv2(input_size=input_size, hidden_size=hidden_size)
+            out_h = checkpoint["linear.weight"].shape[0]   # P1.5: forecast horizon
+            self._lstm = ThermalLSTMv2(input_size=input_size, hidden_size=hidden_size, output_horizon=out_h)
             self._lstm.load_state_dict(checkpoint)
             self._lstm.eval()
             self._lstm_version = "v2"
-            print(f"  ✓  LSTM V2 loaded (BiLSTM+Attention, input={input_size}, hidden={hidden_size})")
+            self._lstm_horizon = out_h
+            print(f"  ✓  LSTM V2 loaded (BiLSTM+Attention, input={input_size}, hidden={hidden_size}, horizon={out_h})")
         elif TORCH_AVAILABLE and os.path.exists(Config.LSTM):
             from mhars.models import ThermalLSTM
             checkpoint = torch.load(Config.LSTM, map_location="cpu")
@@ -278,6 +282,7 @@ class MHARS:
         self._ae_model    = None
         self._ae_threshold = 0.05
         self._ae_version   = None
+        self._ae_calib     = None
         if TORCH_AVAILABLE and os.path.exists(Config.AUTOENCODER_V2):
             from mhars.models import ThermalAutoencoderLSTM
             if os.path.exists(Config.AUTOENCODER_V2_META):
@@ -292,7 +297,11 @@ class MHARS:
                 self._ae_model.eval()
                 self._ae_threshold = ae_meta.get("threshold", 0.05)
                 self._ae_version = "v2"
-                print(f"  ✓  LSTM-AE V2 loaded (input={input_size}, threshold={self._ae_threshold:.5f})")
+                if "calib" in ae_meta:
+                    from mhars.anomaly_calibrator import AnomalyCalibrator
+                    self._ae_calib = AnomalyCalibrator.from_dict(ae_meta["calib"])
+                print(f"  ✓  LSTM-AE V2 loaded (input={input_size}, threshold={self._ae_threshold:.5f}"
+                      f"{', calibrated' if self._ae_calib else ''})")
             else:
                 print(f"  ⚠  LSTM-AE V2 meta not found — skipping")
         elif TORCH_AVAILABLE and os.path.exists(Config.AUTOENCODER):
@@ -328,6 +337,7 @@ class MHARS:
         self._vib_mean      = None
         self._vib_std       = None
         self._vib_threshold = 0.01
+        self._vib_calib     = None
         if TORCH_AVAILABLE and os.path.exists(Config.VIBRATION_DETECTOR):
             from mhars.models import VibrationDetector
             vib_meta_path = Config.VIBRATION_META
@@ -342,8 +352,12 @@ class MHARS:
                 self._vib_mean      = np.array(vib_meta["mean"],  dtype=np.float32)
                 self._vib_std       = np.array(vib_meta["std"],   dtype=np.float32)
                 self._vib_threshold = vib_meta.get("threshold", 0.01)
+                if "calib" in vib_meta:
+                    from mhars.anomaly_calibrator import AnomalyCalibrator
+                    self._vib_calib = AnomalyCalibrator.from_dict(vib_meta["calib"])
                 metadata.check_model_freshness(Config.VIBRATION_DETECTOR, "Vibration Detector")
-                print(f"  ✓  Vibration Detector loaded (features={n_feat})")
+                print(f"  ✓  Vibration Detector loaded (features={n_feat}"
+                      f"{', calibrated' if self._vib_calib else ''})")
             else:
                 print(f"  ⚠  Vibration meta not found — skipping")
         else:
@@ -522,22 +536,19 @@ class MHARS:
             vib_score = self._compute_vib_score(temp_norm)
 
         # Step 4c — Multi-modal inputs (CNN and Audio)
-        cnn_score   = extra.get("cnn_score", 0.5)
+        # P1.3: The CNN (ImageNet weights, no thermal fine-tuning) and the audio
+        # model are not trained on real thermal-camera / fault-audio data — their
+        # "scores" were temperature-derived placeholders that injected ~0.5 noise
+        # into 2 of the 6 fusion modalities. They are GATED OUT of fusion until a
+        # real dataset is available: default to 0.0 (no contribution) and skip the
+        # placeholder inference entirely (also saves per-tick latency). Real values
+        # are still honoured when supplied via extra kwargs or the SensorReading,
+        # so a true sensor can be plugged in later without code changes.
+        cnn_score   = extra.get("cnn_score", 0.0)
         cnn_var     = extra.get("cnn_var", None)
-        
-        # Priority: SensorReading > extra kwargs > simulation fallback
-        audio_score = sr.audio_score if sr.audio_score is not None else extra.get("audio_score", 0.5)
-        audio_var   = sr.audio_var if sr.audio_var is not None else extra.get("audio_var", None)
 
-        if self._cnn is not None and "cnn_score" not in extra:
-            cnn_res = self._cnn.predict_from_temperature(temp_celsius_val, self.profile["safe_max"])
-            cnn_score = cnn_res["hotspot_score"]
-            cnn_var   = cnn_res["grid_variance"]
-            
-        if self._audio is not None and sr.audio_score is None and "audio_score" not in extra:
-            aud_res = self._audio.process_from_temperature(temp_celsius_val, self.profile["safe_max"])
-            audio_score = aud_res["audio_score"]
-            audio_var   = aud_res["audio_variance"]
+        audio_score = sr.audio_score if sr.audio_score is not None else extra.get("audio_score", 0.0)
+        audio_var   = sr.audio_var if sr.audio_var is not None else extra.get("audio_var", None)
 
         # Step 5 — Attention fusion → context score + XAI
         # Fix #10: Pass CNN and vibration as separate modalities instead of max()
@@ -655,6 +666,12 @@ class MHARS:
                 # Phase 1 — Model version tracking
                 "lstm_version": self._lstm_version or "fallback",
                 "ae_version": self._ae_version or "fallback",
+                # P1.5 — Direct multi-horizon forecast (denormalized °C trajectory)
+                "forecast_trajectory_c": (
+                    [round(self._denormalize_temp(v), 2) for v in self._last_forecast_traj]
+                    if self._last_forecast_traj else None
+                ),
+                "forecast_horizon_s": self._lstm_horizon if self._lstm_horizon > 1 else None,
             }
         )
 
@@ -846,15 +863,26 @@ class MHARS:
                 multi_window = list(self._multi_sensor_window)
                 x = torch.FloatTensor([multi_window])  # (1, 12, 5)
                 with torch.no_grad():
-                    pred_norm = float(self._lstm(x).item())
+                    out = self._lstm(x)
+                if self._lstm_horizon > 1:
+                    # P1.5: direct multi-horizon — out is (1, H). Use the next step
+                    # for the anomaly score / conformal interval (continuity), and
+                    # stash the full forward trajectory for the dashboard.
+                    traj = out[0].tolist()
+                    pred_norm = float(traj[0])
+                    self._last_forecast_traj = traj
+                else:
+                    pred_norm = float(out.item())
+                    self._last_forecast_traj = None
             else:
                 # V1: univariate input (batch, 12, 1)
                 x = torch.FloatTensor(window).unsqueeze(0).unsqueeze(-1)
                 with torch.no_grad():
                     pred_norm = float(self._lstm(x).item())
 
-            # Epistemic Uncertainty via MC Dropout
-            if self._lstm_version in ["v1", "v2"]:
+            # Epistemic Uncertainty via MC Dropout (skip for multi-horizon output —
+            # conformal provides the interval; MCD assumes a scalar head).
+            if self._lstm_version in ["v1", "v2"] and self._lstm_horizon == 1:
                  mc_input = torch.FloatTensor([list(self._multi_sensor_window)]) if self._lstm_version == "v2" else torch.FloatTensor(window).unsqueeze(0).unsqueeze(-1)
                  mc_res = self._mc_dropout.predict_with_uncertainty(self._lstm, mc_input)
                  # Only use prediction interval from MCD if conformal isn't available
@@ -903,7 +931,8 @@ class MHARS:
             x = torch.FloatTensor([multi_window])  # (1, 12, 5)
             with torch.no_grad():
                 err = self._ae_model.reconstruction_error(x).item()
-            score = err / (self._ae_threshold + 1e-8)
+            # P1.4: POT/EVT-calibrated score when available, else raw ratio.
+            score = self._ae_calib.score(err) if self._ae_calib else err / (self._ae_threshold + 1e-8)
             return float(np.clip(score * damping, 0, 1))
         else:
             # V1: univariate linear AE (batch, 12)
@@ -952,13 +981,17 @@ class MHARS:
         # Normalize using training statistics
         feat_norm = (feat - self._vib_mean) / (self._vib_std + 1e-8)
 
+        # The vibration detector is now retrained on the serving distribution
+        # (P1.1), so its reconstruction error is calibrated — an idle machine
+        # scores low and faults exceed the threshold. No physics clamp needed.
         if not TORCH_AVAILABLE:
             # Fallback if torch somehow not available
             return float(np.clip(np.mean(np.abs(feat_norm)) * 0.5, 0, 1))
         x = torch.FloatTensor(feat_norm.reshape(1, -1))
         with torch.no_grad():
             error = self._vib_model.reconstruction_error(x).item()
-        score = error / (self._vib_threshold + 1e-8)
+        # P1.4: POT/EVT-calibrated score when available, else raw ratio.
+        score = self._vib_calib.score(error) if self._vib_calib else error / (self._vib_threshold + 1e-8)
         return float(np.clip(score * damping, 0, 1))
 
     def _fuse(self, lstm_score, ae_score, if_score,
@@ -1078,25 +1111,47 @@ class MHARS:
                     rul_cycles = float(self._rul_model(x).item())
                 # Convert cycles to minutes (at 1Hz sampling, 1 cycle ≈ 1 second)
                 rul_minutes = max(0.0, rul_cycles) / 60.0
-                return round(min(rul_minutes, 999.0), 1)
+                # Only trust the learned value when it's physically meaningful.
+                # Near-zero outputs on a stable machine are model noise, not an
+                # imminent failure. A low "minutes-to-limit" is only credible when
+                # the temperature is actually trending toward the limit — otherwise
+                # fall through to physics-based extrapolation, which returns None
+                # when the temperature isn't rising (→ dashboard shows "Stable").
+                rising = predicted_temp > current_temp + 0.5
+                if rul_minutes >= 5.0 and rising:
+                    return round(min(rul_minutes, 999.0), 1)
 
-        # Fallback: linear temperature extrapolation
-        horizon_s = Config.LSTM_PREDICTION_HORIZON_S
-        delta_per_step = predicted_temp - current_temp  # °C per horizon
-        if delta_per_step <= 0:
-            return None  # Temperature falling or stable — no immediate RUL concern
-            
+        # Fallback: physics extrapolation from the *sustained* recent trend.
+        # A single one-step LSTM forecast is far too noisy to treat as a heating
+        # rate (a momentary +10°C swing on an oscillating idle machine would
+        # otherwise read as "seconds to limit"). Estimate the real °C/sec slope
+        # by least-squares over the last ~30s of actual readings instead.
+        temps = [r.temp_c for r in self._reading_history][-30:]
+        if len(temps) < 6:
+            return None  # not enough history yet — report "Stable"
+
+        n = len(temps)
+        xs = list(range(n))            # samples are 1 Hz → x is seconds
+        mean_x = sum(xs) / n
+        mean_y = sum(temps) / n
+        denom = sum((x - mean_x) ** 2 for x in xs) or 1e-6
+        slope = sum((xs[i] - mean_x) * (temps[i] - mean_y) for i in range(n)) / denom  # °C/sec
+
+        # Require a genuine, sustained climb (> ~1.2°C/min) before reporting a
+        # time-to-limit; otherwise the machine is effectively stable.
+        if slope <= 0.02:
+            return None
+
         remaining_degrees = safe_max - current_temp
         if remaining_degrees <= 0:
-            return 0.0  # Already past threshold
-            
-        seconds = (remaining_degrees / delta_per_step) * horizon_s
-        minutes = seconds / 60.0
+            return 0.0  # already past threshold
+
+        minutes = (remaining_degrees / slope) / 60.0
         return round(min(minutes, 999.0), 1)
 
     def _fingerprint_anomaly(self, urgency: float, top_contributor: str, current_temp: float) -> str:
         """Map abstract ML scores to physical fault signatures."""
-        if urgency < 0.4:
+        if urgency < 0.55:
             return "Normal Operations"
             
         is_compute = self.machine_type_id in [0, 2] # CPU or Server

@@ -1,0 +1,9 @@
+{
+  "input_size": 5,
+  "hidden_size": 64,
+  "num_layers": 2,
+  "rul_max_cycles": 125,
+  "test_rmse": 21.37908935546875,
+  "test_mae": 16.58038330078125,
+  "test_nasa_score": 51214.05078125
+}

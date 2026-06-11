@@ -82,9 +82,11 @@ if TORCH_AVAILABLE:
           Input (batch, seq_len, 5) → BiLSTM(128, 2-layer)
             → Attention over timesteps → Dropout → Linear → prediction
         """
-        def __init__(self, input_size=5, hidden_size=128, num_layers=2, dropout=0.2):
+        def __init__(self, input_size=5, hidden_size=128, num_layers=2, dropout=0.2,
+                     output_horizon=1):
             super().__init__()
             self.hidden_size = hidden_size
+            self.output_horizon = output_horizon   # P1.5: direct multi-horizon forecast
             self.lstm = nn.LSTM(
                 input_size, hidden_size,
                 num_layers=num_layers,
@@ -95,27 +97,28 @@ if TORCH_AVAILABLE:
             # Temporal attention: learn which timesteps matter most
             self.attention_weight = nn.Linear(hidden_size * 2, 1)
             self.drop = nn.Dropout(dropout)
-            self.linear = nn.Linear(hidden_size * 2, 1)
+            # Head emits `output_horizon` steps ahead (t+1 … t+H).
+            self.linear = nn.Linear(hidden_size * 2, output_horizon)
 
-        def forward(self, x):
-            # x: (batch, seq_len, input_size)
-            out, _ = self.lstm(x)  # (batch, seq_len, hidden*2)
-            # Temporal attention: softmax over timesteps
+        def _context(self, x):
+            out, _ = self.lstm(x)                              # (batch, seq_len, hidden*2)
             attn_scores = self.attention_weight(out)           # (batch, seq_len, 1)
             attn_weights = torch.softmax(attn_scores, dim=1)   # (batch, seq_len, 1)
             context = (out * attn_weights).sum(dim=1)          # (batch, hidden*2)
-            context = self.drop(context)
-            return self.linear(context).squeeze(-1)            # (batch,)
+            return self.drop(context), attn_weights
+
+        def forward(self, x):
+            context, _ = self._context(x)
+            out = self.linear(context)                         # (batch, H)
+            # Backward-compatible: H==1 returns (batch,), else (batch, H).
+            return out.squeeze(-1) if self.output_horizon == 1 else out
 
         def forward_with_attention(self, x):
             """Return prediction AND attention weights for XAI visualization."""
-            out, _ = self.lstm(x)
-            attn_scores = self.attention_weight(out)
-            attn_weights = torch.softmax(attn_scores, dim=1)
-            context = (out * attn_weights).sum(dim=1)
-            context = self.drop(context)
-            pred = self.linear(context).squeeze(-1)
-            return pred, attn_weights.squeeze(-1)  # (batch,), (batch, seq_len)
+            context, attn_weights = self._context(x)
+            out = self.linear(context)
+            pred = out.squeeze(-1) if self.output_horizon == 1 else out
+            return pred, attn_weights.squeeze(-1)  # (batch,)/(batch,H), (batch, seq_len)
 
     class ThermalAutoencoderLSTM(nn.Module):
         """

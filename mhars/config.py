@@ -81,7 +81,10 @@ class Config:
     IF_CONTAMINATION        = 0.03  # Isolation Forest expected noise ratio
     AE_THRESHOLD_PERCENTILE = 95    # Autoencoder anomaly threshold percentile
     LSTM_WINDOW             = 12    # sliding window size for LSTM
-    LSTM_PREDICTION_HORIZON_S = 1   # LSTM predicts this many seconds ahead (at 1Hz sampling)
+    LSTM_PREDICTION_HORIZON_S = 1   # next-step horizon for the anomaly score (1Hz)
+    # P1.5: direct multi-horizon forecast — model predicts the next H steps so the
+    # dashboard shows a real forward trajectory (not a single 1-step point).
+    LSTM_FORECAST_HORIZON   = 10    # steps ahead (seconds at 1Hz)
 
     # ── PPO training ──────────────────────────────────────────────────────────
     PPO_TIMESTEPS    = 500_000

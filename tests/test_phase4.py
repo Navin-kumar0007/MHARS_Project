@@ -28,14 +28,15 @@ def test_health_score_engine():
 
 def test_trend_analyzer():
     analyzer = TrendAnalyzer(target_mean=0.5, std_dev=0.1)
-    
-    # Normal data
-    for _ in range(10):
+
+    # Warm-up + steady baseline: analyzer auto-calibrates to the real mean and
+    # must report NO drift on stable data.
+    for _ in range(40):
         stats = analyzer.update(0.5)
     assert not stats["is_drifting"]
-    
-    # Drift
-    for _ in range(20):
+
+    # Sustained shift away from the learned baseline → drift detected.
+    for _ in range(30):
         stats = analyzer.update(1.2)
     assert stats["is_drifting"]
     assert stats["trend_score"] > 0.0

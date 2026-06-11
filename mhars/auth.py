@@ -8,8 +8,21 @@ from jose import JWTError, jwt
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Secret key for JWT signing (In production, use a secure random key from environment)
-SECRET_KEY = os.environ.get("MHARS_JWT_SECRET", "***REDACTED_DEV_SECRET***")
+# Secret key for JWT signing. In production (MHARS_REQUIRE_AUTH=true) a strong
+# secret MUST be supplied via MHARS_JWT_SECRET — the default dev key is rejected
+# so tokens cannot be forged by anyone who has read the source.
+_DEFAULT_DEV_SECRET = "***REDACTED_DEV_SECRET***"
+SECRET_KEY = os.environ.get("MHARS_JWT_SECRET", _DEFAULT_DEV_SECRET)
+
+def _auth_required() -> bool:
+    return os.environ.get("MHARS_REQUIRE_AUTH", "false").strip().lower() in ("1", "true", "yes", "on")
+
+if _auth_required() and SECRET_KEY == _DEFAULT_DEV_SECRET:
+    raise RuntimeError(
+        "MHARS_REQUIRE_AUTH is enabled but MHARS_JWT_SECRET is unset. "
+        "Set a strong random MHARS_JWT_SECRET before running in production."
+    )
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 

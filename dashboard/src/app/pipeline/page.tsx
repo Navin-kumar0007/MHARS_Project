@@ -16,242 +16,104 @@ import {
   Legend,
 } from "recharts";
 import { GitBranch, Eye } from "lucide-react";
+import { Card, CardTitle, PageHeader, CHART, tooltipStyle, tooltipLabelStyle } from "@/components/ui";
 
-// ── Helper ────────────────────────────────────────────────────────────────────
 function timeLabel(ts: number) {
-  return new Date(ts * 1000).toLocaleTimeString([], {
-    hour12: false,
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return new Date(ts * 1000).toLocaleTimeString([], { hour12: false, minute: "2-digit", second: "2-digit" });
 }
 
-// ── Pipeline Flow Diagram ─────────────────────────────────────────────────────
-function PipelineFlow({
-  ifScore,
-  lstmScore,
-  aeScore,
-  vibScore,
-  contextScore,
-  urgency,
-  action,
-  route,
-}: {
-  ifScore: number;
-  lstmScore: number;
-  aeScore: number;
-  vibScore: number;
-  contextScore: number;
-  urgency: number;
-  action: string;
-  route: string;
+function scoreTone(score: number) {
+  if (score > 0.6) return { border: "border-rose-500/60", glow: "bg-rose-500/10", text: "text-rose-300" };
+  if (score > 0.3) return { border: "border-amber-500/60", glow: "bg-amber-500/10", text: "text-amber-300" };
+  return { border: "border-emerald-500/40", glow: "bg-emerald-500/5", text: "text-emerald-300" };
+}
+
+function Node({ label, sub, score }: { label: string; sub: string; score: number }) {
+  const t = scoreTone(score);
+  return (
+    <div className={`rounded-xl border ${t.border} ${t.glow} p-4 text-center transition-all duration-500`}>
+      <div className="eyebrow mb-1">{sub}</div>
+      <div className="text-[13px] font-semibold text-slate-100 mb-2">{label}</div>
+      <div className={`metric text-xl ${t.text}`}>{score.toFixed(3)}</div>
+    </div>
+  );
+}
+
+function Connector() {
+  return <div className="flex justify-center"><div className="w-px h-6 bg-gradient-to-b from-white/[0.18] to-transparent" /></div>;
+}
+
+function PipelineFlow({ ifScore, lstmScore, aeScore, vibScore, contextScore, urgency, action, route }: {
+  ifScore: number; lstmScore: number; aeScore: number; vibScore: number;
+  contextScore: number; urgency: number; action: string; route: string;
 }) {
-  const nodeColor = (score: number) =>
-    score > 0.6
-      ? "border-rose-500 shadow-[0_0_12px_rgba(239,68,68,0.4)]"
-      : score > 0.3
-      ? "border-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.3)]"
-      : "border-emerald-500/50";
-
-  const nodeGlow = (score: number) =>
-    score > 0.6
-      ? "bg-rose-500/10"
-      : score > 0.3
-      ? "bg-amber-500/10"
-      : "bg-emerald-500/5";
-
-  const nodes = [
-    { label: "Isolation Forest", score: ifScore, sub: "Noise Filter" },
-    { label: "LSTM Predictor", score: lstmScore, sub: "+10min Forecast" },
-    { label: "Autoencoder", score: aeScore, sub: "Reconstruction" },
-    { label: "Vibration Model", score: vibScore, sub: "Bearing Health" },
-  ];
-
+  const ct = scoreTone(contextScore);
+  const routeColor = route === "edge" ? "border-cyan-500/50 bg-cyan-500/5 text-cyan-300"
+    : route === "cloud" ? "border-blue-500/50 bg-blue-500/5 text-blue-300"
+    : "border-indigo-500/50 bg-indigo-500/5 text-indigo-300";
   return (
-    <div className="space-y-6">
-      {/* Input */}
-      <div className="flex items-center justify-center">
-        <div className="bg-slate-800/60 border border-slate-700 rounded-xl px-6 py-3 text-center">
-          <div className="text-[10px] text-slate-500 uppercase tracking-wider">Input</div>
-          <div className="text-sm font-bold text-slate-200">Sensor Telemetry</div>
+    <div className="space-y-5">
+      <div className="flex justify-center">
+        <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] px-6 py-3 text-center">
+          <div className="eyebrow">Input</div>
+          <div className="text-sm font-semibold text-slate-100 mt-0.5">Sensor Telemetry</div>
         </div>
       </div>
-
-      {/* Arrow */}
-      <div className="flex justify-center">
-        <div className="w-px h-6 bg-slate-700" />
-      </div>
-
-      {/* 4 Models */}
+      <Connector />
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {nodes.map((node) => (
-          <div
-            key={node.label}
-            className={`rounded-xl border-2 p-4 text-center transition-all duration-500 ${nodeColor(
-              node.score
-            )} ${nodeGlow(node.score)}`}
-          >
-            <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">
-              {node.sub}
-            </div>
-            <div className="text-xs font-bold text-slate-200 mb-2">{node.label}</div>
-            <div
-              className={`text-xl font-black ${
-                node.score > 0.6
-                  ? "text-rose-400"
-                  : node.score > 0.3
-                  ? "text-amber-400"
-                  : "text-emerald-400"
-              }`}
-            >
-              {node.score.toFixed(3)}
-            </div>
-          </div>
-        ))}
+        <Node label="Isolation Forest" sub="Noise Filter" score={ifScore} />
+        <Node label="LSTM Predictor" sub="+10-step Forecast" score={lstmScore} />
+        <Node label="Autoencoder" sub="Reconstruction" score={aeScore} />
+        <Node label="Vibration Model" sub="Bearing Health" score={vibScore} />
       </div>
-
-      {/* Arrow */}
+      <Connector />
       <div className="flex justify-center">
-        <div className="w-px h-6 bg-slate-700" />
-      </div>
-
-      {/* Fusion */}
-      <div className="flex items-center justify-center">
-        <div
-          className={`rounded-xl border-2 p-4 text-center w-64 transition-all duration-500 ${nodeColor(
-            contextScore
-          )} ${nodeGlow(contextScore)}`}
-        >
-          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">
-            Attention-Weighted
-          </div>
-          <div className="text-xs font-bold text-slate-200 mb-2">Fusion Layer</div>
-          <div className="flex items-center justify-center gap-4">
-            <div>
-              <div className="text-[10px] text-slate-500">Context</div>
-              <div className="text-lg font-black text-white">{contextScore.toFixed(3)}</div>
-            </div>
-            <div className="w-px h-8 bg-slate-700" />
-            <div>
-              <div className="text-[10px] text-slate-500">Urgency</div>
-              <div className="text-lg font-black text-white">{urgency.toFixed(3)}</div>
-            </div>
+        <div className={`rounded-xl border ${ct.border} ${ct.glow} p-4 text-center w-72 transition-all duration-500`}>
+          <div className="eyebrow mb-1">Attention-Weighted</div>
+          <div className="text-[13px] font-semibold text-slate-100 mb-2">Fusion Layer</div>
+          <div className="flex items-center justify-center gap-5">
+            <div><div className="text-[10px] text-slate-500">Context</div><div className="metric text-lg text-slate-100">{contextScore.toFixed(3)}</div></div>
+            <div className="w-px h-8 bg-white/[0.1]" />
+            <div><div className="text-[10px] text-slate-500">Urgency</div><div className="metric text-lg text-slate-100">{urgency.toFixed(3)}</div></div>
           </div>
         </div>
       </div>
-
-      {/* Arrow */}
-      <div className="flex justify-center">
-        <div className="w-px h-6 bg-slate-700" />
-      </div>
-
-      {/* PPO + Router */}
+      <Connector />
       <div className="grid grid-cols-2 gap-4 max-w-lg mx-auto">
-        <div className="rounded-xl border-2 border-purple-500/50 bg-purple-500/5 p-4 text-center">
-          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">
-            Reinforcement Learning
-          </div>
-          <div className="text-xs font-bold text-slate-200 mb-2">PPO Agent</div>
-          <div className="text-lg font-black text-purple-400 uppercase">{action}</div>
+        <div className="rounded-xl border border-indigo-500/50 bg-indigo-500/5 p-4 text-center">
+          <div className="eyebrow mb-1">Reinforcement Learning</div>
+          <div className="text-[13px] font-semibold text-slate-100 mb-2">PPO Agent</div>
+          <div className="metric text-lg text-indigo-300 uppercase">{action}</div>
         </div>
-        <div
-          className={`rounded-xl border-2 p-4 text-center ${
-            route === "edge"
-              ? "border-teal-500/50 bg-teal-500/5"
-              : route === "cloud"
-              ? "border-blue-500/50 bg-blue-500/5"
-              : "border-indigo-500/50 bg-indigo-500/5"
-          }`}
-        >
-          <div className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">
-            Inference Path
-          </div>
-          <div className="text-xs font-bold text-slate-200 mb-2">Router</div>
-          <div
-            className={`text-lg font-black uppercase ${
-              route === "edge"
-                ? "text-teal-400"
-                : route === "cloud"
-                ? "text-blue-400"
-                : "text-indigo-400"
-            }`}
-          >
-            {route}
-          </div>
+        <div className={`rounded-xl border ${routeColor} p-4 text-center`}>
+          <div className="eyebrow mb-1">Inference Path</div>
+          <div className="text-[13px] font-semibold text-slate-100 mb-2">Router</div>
+          <div className="metric text-lg uppercase">{route}</div>
         </div>
       </div>
     </div>
   );
 }
 
-// ── PPO Observation Vector ────────────────────────────────────────────────────
-const OBS_LABELS = [
-  "Temp (norm)",
-  "Predict (norm)",
-  "AE Score",
-  "Machine Type",
-  "Steps Since Act",
-  "Urgency",
-];
+const OBS_LABELS = ["Temp (norm)", "Predict (norm)", "AE Score", "Machine Type", "Steps Since Act", "Urgency"];
 
-function ObsVector({ obs }: { obs: number[] }) {
-  return (
-    <div className="grid grid-cols-3 gap-3">
-      {obs.map((val, idx) => (
-        <div
-          key={idx}
-          className="bg-slate-800/60 border border-slate-700/60 rounded-lg p-3 text-center"
-        >
-          <div className="text-[9px] text-slate-500 uppercase tracking-wider mb-1">
-            {OBS_LABELS[idx] || `dim[${idx}]`}
-          </div>
-          <div className="text-lg font-black text-slate-200 font-mono">
-            {val.toFixed(3)}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function PipelinePage() {
   const { latest, history } = useTelemetry();
-
-  const chartData = history.map((t) => ({
-    ...t,
-    time: timeLabel(t.timestamp),
-  }));
-
-  // Per-model bar data
+  const chartData = history.map((t) => ({ ...t, time: timeLabel(t.timestamp) }));
   const barData = [
-    { name: "Isolation\nForest", score: latest?.if_score ?? 0, color: "#06b6d4" },
-    { name: "LSTM", score: latest?.lstm_score ?? 0, color: "#14b8a6" },
-    { name: "Autoencoder", score: latest?.ae_score ?? 0, color: "#f59e0b" },
-    { name: "Vibration", score: latest?.vib_score ?? 0, color: "#a855f7" },
+    { name: "Isolation\nForest", score: latest?.if_score ?? 0, color: CHART.cyan },
+    { name: "LSTM", score: latest?.lstm_score ?? 0, color: CHART.teal },
+    { name: "Autoencoder", score: latest?.ae_score ?? 0, color: CHART.amber },
+    { name: "Vibration", score: latest?.vib_score ?? 0, color: CHART.indigo },
   ];
+  const obs = latest?.raw_obs ?? [0, 0, 0, 0, 0, 0];
 
   return (
-    <div className="p-6 space-y-6 relative overflow-hidden min-h-screen">
-      {/* Background */}
-      <div className="absolute top-[-15%] right-[-5%] w-[40%] h-[40%] bg-indigo-600/8 blur-[150px] rounded-full pointer-events-none" />
+    <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
+      <PageHeader icon={GitBranch} title="AI Pipeline Deep Dive" subtitle="Every model in the MHARS decision chain, live" accent="#818cf8" />
 
-      {/* Header */}
-      <header className="relative z-10 border-b border-slate-800/60 pb-4">
-        <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-3">
-          <GitBranch className="w-6 h-6 text-indigo-400" />
-          AI Pipeline Deep Dive
-        </h1>
-        <p className="text-xs text-slate-500 mt-0.5">
-          Interactive visualization of every AI model in the MHARS decision chain
-        </p>
-      </header>
-
-      {/* Pipeline Flow */}
-      <div className="relative z-10 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-6 shadow-xl">
-        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-6">
-          Live Pipeline State
-        </h2>
+      <Card>
+        <CardTitle icon={GitBranch}>Live Pipeline State</CardTitle>
         <PipelineFlow
           ifScore={latest?.if_score ?? 0}
           lstmScore={latest?.lstm_score ?? 0}
@@ -262,82 +124,54 @@ export default function PipelinePage() {
           action={latest?.action ?? "standby"}
           route={latest?.route ?? "none"}
         />
-      </div>
+      </Card>
 
-      {/* Charts Row */}
-      <div className="relative z-10 grid grid-cols-12 gap-5">
-        {/* Per-Model Bar Chart */}
-        <div className="col-span-12 lg:col-span-5 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
-            Per-Model Scores (Current)
-          </h2>
+      <div className="grid grid-cols-12 gap-4">
+        <Card className="col-span-12 lg:col-span-5">
+          <CardTitle>Per-Model Scores (Current)</CardTitle>
           <div className="h-[220px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={barData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="name" stroke="#475569" fontSize={10} tickMargin={6} />
-                <YAxis stroke="#475569" fontSize={10} domain={[0, 1]} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#0f172a",
-                    borderColor: "#1e293b",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                  }}
-                />
+                <CartesianGrid strokeDasharray="3 6" stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="name" stroke={CHART.axis} fontSize={10} tickMargin={6} tickLine={false} axisLine={false} />
+                <YAxis stroke={CHART.axis} fontSize={10} domain={[0, 1]} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} />
                 <Bar dataKey="score" radius={[6, 6, 0, 0]}>
-                  {barData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
+                  {barData.map((e, i) => (<Cell key={i} fill={e.color} />))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </Card>
 
-        {/* Latency History */}
-        <div className="col-span-12 lg:col-span-7 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
-            Inference Latency Over Time (ms)
-          </h2>
+        <Card className="col-span-12 lg:col-span-7">
+          <CardTitle>Inference Latency Over Time (ms)</CardTitle>
           <div className="h-[220px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={6} />
-                <YAxis stroke="#475569" fontSize={10} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#0f172a",
-                    borderColor: "#1e293b",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                  }}
-                  itemStyle={{ color: "#e2e8f0" }}
-                />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: "11px" }} />
-                <Line
-                  type="monotone"
-                  dataKey="latency_ms"
-                  name="Latency (ms)"
-                  stroke="#8b5cf6"
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                />
+                <CartesianGrid strokeDasharray="3 6" stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="time" stroke={CHART.axis} fontSize={10} tickMargin={6} tickLine={false} axisLine={false} />
+                <YAxis stroke={CHART.axis} fontSize={10} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} itemStyle={{ color: "#e2e8f0" }} />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />
+                <Line type="monotone" dataKey="latency_ms" name="Latency (ms)" stroke={CHART.indigo} strokeWidth={2} dot={false} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </Card>
       </div>
 
-      {/* PPO Observation Vector */}
-      <div className="relative z-10 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-          <Eye className="w-3.5 h-3.5" /> PPO Agent Observation Vector (What the RL Agent Sees)
-        </h2>
-        <ObsVector obs={latest?.raw_obs ?? [0, 0, 0, 0, 0, 0]} />
-      </div>
+      <Card>
+        <CardTitle icon={Eye}>PPO Agent Observation Vector (What the RL Agent Sees)</CardTitle>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {obs.map((val, idx) => (
+            <div key={idx} className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-3 text-center">
+              <div className="eyebrow mb-1">{OBS_LABELS[idx] || `dim[${idx}]`}</div>
+              <div className="metric text-lg text-slate-100">{val.toFixed(3)}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
     </div>
   );
 }

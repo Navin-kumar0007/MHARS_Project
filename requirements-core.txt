@@ -11,7 +11,9 @@ pydantic>=2.0
 # ML / Deep Learning (CPU-compatible)
 numpy>=1.24.0
 pandas>=2.0.0
-scikit-learn>=1.3.0
+# Model pickles (IsolationForest) are trained with 1.8.x. Keep within 1.8 to
+# avoid InconsistentVersionWarning / invalid results; retrain if bumping major.
+scikit-learn>=1.8.0,<1.9.0
 scipy>=1.10.0
 
 # Reinforcement Learning
@@ -44,3 +46,4 @@ pytest>=7.0.0
 passlib>=1.7.4
 bcrypt<4.0.0
 python-jose[cryptography]>=3.3.0
+python-multipart>=0.0.6  # required by FastAPI OAuth2PasswordRequestForm (login)

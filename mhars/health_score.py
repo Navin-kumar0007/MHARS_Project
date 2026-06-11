@@ -29,13 +29,17 @@ class HealthScoreEngine:
         # Based on proximity to safe_max and critical thresholds
         safe_max = self.profile["safe_max"]
         critical = self.profile["critical"]
-        
+
+        # Guard against degenerate profiles that would cause division by zero.
+        safe_span = max(safe_max - 25, 1e-6)
+        crit_span = max(critical - safe_max, 1e-6)
+
         if current_temp <= safe_max:
             # Scale from 100 to 70 as it approaches safe_max
-            thermal_score = 100 - 30 * (max(0, current_temp - 25) / (safe_max - 25))
+            thermal_score = 100 - 30 * (max(0, current_temp - 25) / safe_span)
         elif current_temp < critical:
             # Scale from 70 to 0 as it approaches critical
-            thermal_score = 70 - 70 * ((current_temp - safe_max) / (critical - safe_max))
+            thermal_score = 70 - 70 * ((current_temp - safe_max) / crit_span)
         else:
             thermal_score = 0.0
             
@@ -43,7 +47,9 @@ class HealthScoreEngine:
         thermal_score = thermal_score * (1.0 - (anomaly_score * 0.5))
             
         # 2. Mechanical/Vibration Health (0-100)
-        mech_score = 100 * (1.0 - min(vib_score * 1.5, 1.0))
+        # vib_score is a [0,1] anomaly level; only penalise meaningfully high values
+        # so a low synthetic baseline doesn't crush the score on healthy machines.
+        mech_score = 100 * (1.0 - min(max(vib_score - 0.2, 0.0) * 1.25, 1.0))
         
         # 3. RUL Health (0-100)
         # If RUL > 60 mins, it's 100. If < 5 mins, it's 0.
