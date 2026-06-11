@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useTelemetry, API_BASE } from "@/components/TelemetryProvider";
 import { Card, CardTitle, PageHeader, Badge, Progress, Awaiting, CHART } from "@/components/ui";
-import { Activity, Boxes, Gauge, Timer, Cpu, ShieldCheck } from "lucide-react";
+import { Activity, Boxes, Gauge, ShieldCheck, Radar, Fingerprint } from "lucide-react";
 
 type EvalReport = {
   generated_at: number;
@@ -17,13 +17,22 @@ export default function DiagnosticsPage() {
   const { systemStatus, latest, history, isConnected } = useTelemetry();
   const [evalRep, setEvalRep] = useState<EvalReport | null>(null);
   const [evalAvail, setEvalAvail] = useState<boolean | null>(null);
+  const [registry, setRegistry] = useState<{ name: string; file: string; present: boolean; sha: string | null; size_kb: number; modified: number | null }[]>([]);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/eval_report`)
       .then((r) => r.json())
       .then((d) => { setEvalAvail(!!d.available); setEvalRep(d.report); })
       .catch(() => setEvalAvail(false));
+    fetch(`${API_BASE}/api/model_registry`)
+      .then((r) => r.json())
+      .then((d) => setRegistry(d.registry || []))
+      .catch(() => setRegistry([]));
   }, []);
+
+  const drift = latest?.metadata?.drift as
+    | { drift_score: number; drifting: boolean; retrain_recommended: boolean; reference_ready: boolean; threshold: number }
+    | undefined;
 
   const ms = systemStatus?.model_status || {};
   const degraded = systemStatus?.models_degraded || [];
@@ -76,6 +85,46 @@ export default function DiagnosticsPage() {
           </div>
         )}
       </Card>
+
+      {/* Drift + Registry */}
+      <div className="grid grid-cols-12 gap-4">
+        <Card className="col-span-12 lg:col-span-5">
+          <CardTitle icon={Radar} right={drift ? <Badge tone={drift.retrain_recommended ? "bad" : drift.drifting ? "warn" : "good"}>{drift.retrain_recommended ? "retrain advised" : drift.drifting ? "drifting" : "stable"}</Badge> : undefined}>
+            Concept-Drift Monitor
+          </CardTitle>
+          {drift ? (
+            <div className="space-y-3">
+              <div className="flex items-end gap-2">
+                <span className="metric text-3xl" style={{ color: drift.drifting ? CHART.warn : CHART.good }}>{drift.drift_score.toFixed(2)}</span>
+                <span className="text-[11px] text-slate-500 mb-1">drift score · threshold {drift.threshold}</span>
+              </div>
+              <Progress value={Math.min(100, (drift.drift_score / (drift.threshold * 2)) * 100)} color={drift.drifting ? CHART.warn : CHART.good} />
+              <p className="text-[11px] text-slate-500">
+                {!drift.reference_ready ? "Building reference distribution from normal operation…"
+                  : drift.retrain_recommended ? "Sustained distribution shift — retraining recommended."
+                  : drift.drifting ? "Distribution shifting — watching." : "Normal operating distribution stable."}
+              </p>
+            </div>
+          ) : <Awaiting label="Awaiting telemetry…" />}
+        </Card>
+
+        <Card className="col-span-12 lg:col-span-7">
+          <CardTitle icon={Fingerprint}>Model Registry</CardTitle>
+          {registry.length === 0 ? <Awaiting label="Loading registry…" /> : (
+            <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
+              {registry.map((r) => (
+                <div key={r.file} className="flex items-center justify-between rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-1.5">
+                  <div className="min-w-0">
+                    <div className="text-xs text-slate-200">{r.name}</div>
+                    <div className="metric text-[10px] text-slate-500 truncate">{r.present ? `${r.sha} · ${r.size_kb} KB` : "missing"}</div>
+                  </div>
+                  <Badge tone={r.present ? "good" : "bad"}>{r.present ? "present" : "absent"}</Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
 
       {/* Eval metrics */}
       <div className="grid grid-cols-12 gap-4">

@@ -417,6 +417,40 @@ async def get_system_status():
     }
 
 
+@app.get("/api/model_registry")
+async def get_model_registry():
+    """X.1: model registry — identity (sha + size + mtime) of each live artifact.
+    Lets you confirm exactly which trained weights are deployed."""
+    import hashlib
+    mdir = os.path.join(os.path.dirname(__file__), "..", "models")
+    artifacts = {
+        "Forecast (LSTM)": "lstm_v2.pt",
+        "Anomaly AE": "autoencoder_lstm_v2.pt",
+        "Vibration": "vibration_detector.pt",
+        "Isolation Forest": "isolation_forest.pkl",
+        "Fusion": "learned_fusion.pt",
+        "RUL Predictor": "rul_predictor_v2.pt",
+        "Fault Classifier": "fault_classifier.pt",
+        "PPO Agent": "ppo_thermal.zip",
+    }
+    out = []
+    for name, fn in artifacts.items():
+        path = os.path.join(mdir, fn)
+        if os.path.exists(path):
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            st = os.stat(path)
+            out.append({"name": name, "file": fn, "present": True,
+                        "sha": h.hexdigest()[:12], "size_kb": round(st.st_size / 1024, 1),
+                        "modified": st.st_mtime})
+        else:
+            out.append({"name": name, "file": fn, "present": False,
+                        "sha": None, "size_kb": 0, "modified": None})
+    return {"registry": out}
+
+
 @app.get("/api/eval_report")
 async def get_eval_report():
     """P4.3: return the offline anomaly-detection evaluation report (if present).
