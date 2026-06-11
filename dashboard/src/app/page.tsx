@@ -158,6 +158,7 @@ export default function DashboardPage() {
 
   const concerned = latest?.action !== "do-nothing" || (latest?.urgency ?? 0) >= 0.7;
   const fault = concerned && meta.fault_type && meta.fault_type !== "Normal Operations" ? meta.fault_type : null;
+  const faultConf = meta.fault_confidence as number | undefined;
   const maint = meta.maintenance_plan as
     | { status: string; urgency_level: string; action: string; window_start: string | null; window_end: string | null }
     | undefined;
@@ -189,27 +190,35 @@ export default function DashboardPage() {
   const topKey = meta.top_contributor as string | undefined;
   const topRow = XAI_ROWS.find((r) => r.key === topKey);
 
-  const chartData = history.map((t) => ({ ...t, time: timeLabel(t.timestamp) }));
+  const chartData = history.map((t) => ({ ...t, time: timeLabel(t.timestamp), detector: t.metadata?.anomaly_probability ?? 0 }));
   const tempSpark = history.slice(-30).map((t) => t.current_temp);
+  const detectorP = meta.anomaly_probability as number | undefined;
 
-  // P1.5: forward multi-horizon forecast trajectory projected past "now".
+  // P1.5/P2.1: forward multi-horizon p50 trajectory + p10–p90 uncertainty band.
   const fcTraj = (meta.forecast_trajectory_c as number[] | null) || null;
+  const fcBand = (meta.forecast_band_c as number[][] | null) || null;
   const tempChartData = useMemo(() => {
     const base = history.map((t, i) => ({
       time: timeLabel(t.timestamp),
-      current_temp: t.current_temp,
-      lstm_prediction: t.lstm_prediction,
+      current_temp: t.current_temp as number | undefined,
+      lstm_prediction: t.lstm_prediction as number | undefined,
       // anchor the projection line to the latest actual point so it connects
-      projection: i === history.length - 1 ? t.current_temp : undefined as number | undefined,
+      projection: i === history.length - 1 ? t.current_temp : (undefined as number | undefined),
+      bandLo: undefined as number | undefined,
+      bandHi: undefined as number | undefined,
     }));
     if (fcTraj && fcTraj.length && history.length) {
       const lastTs = history[history.length - 1].timestamp;
-      fcTraj.forEach((v, i) =>
-        base.push({ time: timeLabel(lastTs + i + 1), current_temp: undefined as any, lstm_prediction: undefined as any, projection: v })
-      );
+      fcTraj.forEach((v, i) => {
+        base.push({
+          time: timeLabel(lastTs + i + 1),
+          current_temp: undefined, lstm_prediction: undefined, projection: v,
+          bandLo: fcBand?.[i]?.[0], bandHi: fcBand?.[i]?.[1],
+        });
+      });
     }
     return base;
-  }, [history, fcTraj]);
+  }, [history, fcTraj, fcBand]);
 
   // KPIs
   const kpis = useMemo(() => {
@@ -285,7 +294,10 @@ export default function DashboardPage() {
           {fault && (
             <Card className="!p-3 flex items-center gap-2.5 border-rose-500/30 bg-rose-500/5" title="The fusion layer matched this failure signature.">
               <ShieldAlert className="w-4 h-4 text-rose-400" />
-              <span className="text-sm text-rose-200">Identified fault: <b className="font-semibold">{fault}</b></span>
+              <span className="text-sm text-rose-200">
+                Identified fault: <b className="font-semibold">{fault}</b>
+                {faultConf ? <span className="text-rose-300/70"> · {Math.round(faultConf * 100)}% confidence</span> : null}
+              </span>
             </Card>
           )}
           {drift && (
@@ -375,6 +387,9 @@ export default function DashboardPage() {
                 <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} />
                 <ReferenceLine y={th.safe_max} stroke={CHART.warn} strokeDasharray="4 4" strokeOpacity={0.6} label={{ value: "SAFE", fill: CHART.warn, fontSize: 9, position: "insideTopRight" }} />
                 <ReferenceLine y={th.critical} stroke={CHART.crit} strokeDasharray="4 4" strokeOpacity={0.6} label={{ value: "LIMIT", fill: CHART.crit, fontSize: 9, position: "insideTopRight" }} />
+                {/* P2.1: p10 / p90 uncertainty band as two faint dotted bounds (keeps axis tight) */}
+                <Line type="monotone" dataKey="bandHi" name="p90" stroke={CHART.indigo} strokeWidth={1} strokeOpacity={0.4} strokeDasharray="1 3" dot={false} isAnimationActive={false} connectNulls legendType="none" />
+                <Line type="monotone" dataKey="bandLo" name="p10" stroke={CHART.indigo} strokeWidth={1} strokeOpacity={0.4} strokeDasharray="1 3" dot={false} isAnimationActive={false} connectNulls legendType="none" />
                 <Area type="monotone" dataKey="current_temp" name="Now (°C)" stroke={CHART.temp} strokeWidth={2.2} fill="url(#tempFill)" dot={false} isAnimationActive={false} connectNulls={false} />
                 <Line type="monotone" dataKey="lstm_prediction" name="Forecast (°C)" stroke={CHART.forecast} strokeWidth={1.6} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="projection" name="Projection (°C)" stroke={CHART.indigo} strokeWidth={1.8} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
@@ -417,11 +432,16 @@ export default function DashboardPage() {
                 <span style={{ color: CHART.good }}>● Trend</span>
                 <span style={{ color: CHART.amber }}>● Pattern</span>
                 <span style={{ color: CHART.fuchsia }}>● Vibration</span>
-                <span className="text-slate-200">● Combined</span>
+                <span style={{ color: CHART.bad }}>● Detector</span>
               </div>
             }
           >
             Anomaly Signals (per model, 0–1)
+            {detectorP != null && (
+              <span className="ml-2 text-[11px]" style={{ color: detectorP > 0.5 ? CHART.bad : CHART.good }}>
+                · P(fault) {(detectorP * 100).toFixed(0)}%
+              </span>
+            )}
           </CardTitle>
           <div className="h-[230px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -436,7 +456,7 @@ export default function DashboardPage() {
                 <XAxis dataKey="time" stroke={CHART.axis} fontSize={CHART.tickFont} tickMargin={8} tickLine={false} axisLine={false} />
                 <YAxis stroke={CHART.axis} fontSize={CHART.tickFont} domain={[0, 1]} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} />
-                <Area type="monotone" dataKey="context_score" name="Combined" stroke={CHART.combined} strokeWidth={2} fill="url(#combFill)" dot={false} isAnimationActive={false} />
+                <Area type="monotone" dataKey="detector" name="Detector P(fault)" stroke={CHART.bad} strokeWidth={2.2} fill="url(#combFill)" dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="if_score" name="Odd reading" stroke={CHART.cyan} strokeWidth={1.3} dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="lstm_score" name="Heat trend" stroke={CHART.good} strokeWidth={1.3} dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="ae_score" name="Pattern" stroke={CHART.amber} strokeWidth={1.3} dot={false} isAnimationActive={false} />

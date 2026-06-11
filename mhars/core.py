@@ -244,7 +244,10 @@ class MHARS:
         self._lstm = None
         self._lstm_version = None  # "tft", "v2", or "v1"
         self._lstm_horizon = 1      # P1.5: multi-horizon forecast length
-        self._last_forecast_traj = None  # normalized forward trajectory (t+1…t+H)
+        self._lstm_qmode = False    # P2.1: per-step quantile forecaster
+        self._lstm_quantiles = None
+        self._last_forecast_traj = None  # normalized forward trajectory (p50, t+1…t+H)
+        self._last_forecast_band = None  # [(lo,hi)…] normalized p10/p90 per step
         if TORCH_AVAILABLE and getattr(Config, 'TFT_MODEL', False) and os.path.exists(Config.TFT_MODEL):
             from mhars.models import TFTPredictor
             checkpoint = torch.load(Config.TFT_MODEL, map_location="cpu")
@@ -258,13 +261,23 @@ class MHARS:
             checkpoint = torch.load(Config.LSTM_V2, map_location="cpu")
             hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
             input_size = checkpoint["lstm.weight_ih_l0"].shape[1]
-            out_h = checkpoint["linear.weight"].shape[0]   # P1.5: forecast horizon
+            out_h = checkpoint["linear.weight"].shape[0]   # = H (P1.5) or H*Q (P2.1)
             self._lstm = ThermalLSTMv2(input_size=input_size, hidden_size=hidden_size, output_horizon=out_h)
             self._lstm.load_state_dict(checkpoint)
             self._lstm.eval()
             self._lstm_version = "v2"
-            self._lstm_horizon = out_h
-            print(f"  ✓  LSTM V2 loaded (BiLSTM+Attention, input={input_size}, hidden={hidden_size}, horizon={out_h})")
+            # P2.1: a sidecar meta marks quantile mode (head = H * Q).
+            v2_meta_path = Config.LSTM_V2.replace(".pt", "_meta.json")
+            if os.path.exists(v2_meta_path):
+                with open(v2_meta_path) as f:
+                    v2_meta = json.load(f)
+                self._lstm_quantiles = v2_meta.get("quantiles")
+                self._lstm_horizon = v2_meta.get("horizon", out_h)
+                self._lstm_qmode = bool(self._lstm_quantiles)
+            else:
+                self._lstm_horizon = out_h
+            _qtag = f", quantiles={len(self._lstm_quantiles)}" if self._lstm_qmode else ""
+            print(f"  ✓  LSTM V2 loaded (BiLSTM+Attention, input={input_size}, hidden={hidden_size}, horizon={self._lstm_horizon}{_qtag})")
         elif TORCH_AVAILABLE and os.path.exists(Config.LSTM):
             from mhars.models import ThermalLSTM
             checkpoint = torch.load(Config.LSTM, map_location="cpu")
@@ -437,6 +450,28 @@ class MHARS:
             except Exception as e:
                 print(f"  ⚠  RUL Predictor V2 load failed: {e}")
 
+        # P2.4: Supervised fault classifier
+        self._fault_clf = None
+        self._fault_mean = None
+        self._fault_std = None
+        if TORCH_AVAILABLE and os.path.exists(Config.FAULT_CLASSIFIER) and os.path.exists(Config.FAULT_CLASSIFIER_META):
+            try:
+                from mhars.models import FaultClassifier
+                with open(Config.FAULT_CLASSIFIER_META) as f:
+                    fc_meta = json.load(f)
+                self._fault_clf = FaultClassifier(
+                    n_features=fc_meta.get("n_features", 10),
+                    n_classes=fc_meta.get("n_classes", len(Config.FAULT_CLASSES)))
+                self._fault_clf.load_state_dict(torch.load(Config.FAULT_CLASSIFIER, map_location="cpu"))
+                self._fault_clf.eval()
+                self._fault_mean = np.array(fc_meta["mean"], dtype=np.float32)
+                self._fault_std = np.array(fc_meta["std"], dtype=np.float32)
+                print(f"  ✓  Fault Classifier loaded (acc={fc_meta.get('val_acc', '?')})")
+            except Exception as e:
+                print(f"  ⚠  Fault Classifier load failed: {e}")
+        else:
+            print(f"  ⚠  Fault Classifier not found — using rule-based fingerprint")
+
         # Phase 2: SAC Agent
         self._sac = None
         sac_path = Config.SAC_MODEL.replace(".zip", "")
@@ -590,7 +625,16 @@ class MHARS:
         urgency = float(np.clip(urgency, 0, 1))
 
         # Step 5.5 — Anomaly Fingerprinting
-        fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius_val)
+        # P2.4: prefer the learned fault classifier; fall back to the rule-based
+        # fingerprint when no model is loaded or its confidence is low.
+        fault_features = self._fault_feature_vector(if_score, lstm_score, ae_score, vib_score, context, urgency)
+        clf_fault, fault_confidence, anomaly_probability = self._classify_fault(fault_features)
+        if clf_fault is not None and clf_fault != "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE and urgency >= 0.5:
+            fault_type = clf_fault
+        elif clf_fault == "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE:
+            fault_type = "Normal Operations"
+        else:
+            fault_type = self._fingerprint_anomaly(urgency, top_contributor, temp_celsius_val)
 
         # Step 6 — RL Router decision (apply conformal boost to urgency)
         urgency = float(np.clip(urgency + conformal_boost, 0, 1))
@@ -652,6 +696,11 @@ class MHARS:
                 "contributions": contributions, "top_contributor": top_contributor,
                 "feature_importance": feature_importance,
                 "fault_type": fault_type,
+                "fault_confidence": round(fault_confidence, 3),
+                # P2.2: calibrated anomaly-detection score (ROC-AUC ~0.93 vs ~0.55
+                # for the raw AE/fused scores). Display signal; control logic
+                # (urgency/PPO) is intentionally left unchanged.
+                "anomaly_probability": round(anomaly_probability, 4),
                 "health_score": health_data["score"],
                 "health_trend": health_data["trend"],
                 "health_breakdown": health_data["breakdown"],
@@ -670,6 +719,11 @@ class MHARS:
                 "forecast_trajectory_c": (
                     [round(self._denormalize_temp(v), 2) for v in self._last_forecast_traj]
                     if self._last_forecast_traj else None
+                ),
+                "forecast_band_c": (
+                    [[round(self._denormalize_temp(lo), 2), round(self._denormalize_temp(hi), 2)]
+                     for (lo, hi) in self._last_forecast_band]
+                    if self._last_forecast_band else None
                 ),
                 "forecast_horizon_s": self._lstm_horizon if self._lstm_horizon > 1 else None,
             }
@@ -864,7 +918,25 @@ class MHARS:
                 x = torch.FloatTensor([multi_window])  # (1, 12, 5)
                 with torch.no_grad():
                     out = self._lstm(x)
-                if self._lstm_horizon > 1:
+                if self._lstm_qmode:
+                    # P2.1: out is (1, H*Q) → (H, Q) per-step quantiles.
+                    nq = len(self._lstm_quantiles)
+                    arr = out[0].reshape(self._lstm_horizon, nq)
+                    mid = nq // 2
+                    p50 = arr[:, mid].tolist()
+                    lo = arr[:, 0].tolist()
+                    hi = arr[:, -1].tolist()
+                    pred_norm = float(p50[0])
+                    self._last_forecast_traj = p50
+                    self._last_forecast_band = list(zip(lo, hi))
+                    # Native next-step quantile interval (replaces MC-Dropout/conformal).
+                    prediction_interval = {
+                        "lower": round(self._denormalize_temp(lo[0]), 2),
+                        "upper": round(self._denormalize_temp(hi[0]), 2),
+                        "width_celsius": round((hi[0] - lo[0]) * (self.profile["critical"] - 15.0), 2),
+                        "quantile": round(self._lstm_quantiles[-1] - self._lstm_quantiles[0], 4),
+                    }
+                elif self._lstm_horizon > 1:
                     # P1.5: direct multi-horizon — out is (1, H). Use the next step
                     # for the anomaly score / conformal interval (continuity), and
                     # stash the full forward trajectory for the dashboard.
@@ -895,8 +967,9 @@ class MHARS:
                           "confidence_score": mc_res["confidence"]
                       }
                       
-            # Conformal prediction interval (only if TFT is not used)
-            if self._lstm_version != "tft" and self._conformal is not None and self._conformal.is_calibrated:
+            # Conformal prediction interval (skip for TFT and for the P2.1
+            # quantile forecaster, which supplies its own native interval).
+            if self._lstm_version != "tft" and not self._lstm_qmode and self._conformal is not None and self._conformal.is_calibrated:
                 interval = self._conformal.predict_interval(pred_norm)
                 prediction_interval = {
                     "lower": round(self._denormalize_temp(interval["lower"]), 2),
@@ -1148,6 +1221,34 @@ class MHARS:
 
         minutes = (remaining_degrees / slope) / 60.0
         return round(min(minutes, 999.0), 1)
+
+    def _fault_feature_vector(self, if_score, lstm_score, ae_score, vib_score, context, urgency):
+        """P2.4: per-tick feature vector for the fault classifier — temperature
+        dynamics from the reading history plus the per-model anomaly scores."""
+        temps = [r.temp_c for r in self._reading_history][-8:]
+        dT_dt = (temps[-1] - temps[-2]) if len(temps) >= 2 else 0.0
+        slope5 = (temps[-1] - temps[-5]) / 4.0 if len(temps) >= 5 else 0.0
+        std8 = float(np.std(temps)) if len(temps) >= 2 else 0.0
+        max_dT = float(np.abs(np.diff(temps)).max()) if len(temps) >= 2 else 0.0
+        return np.array([dT_dt, slope5, std8, max_dT,
+                         if_score, lstm_score, ae_score, vib_score, context, urgency],
+                        dtype=np.float32)
+
+    def _classify_fault(self, features):
+        """Return (fault_name, confidence, p_fault).
+        p_fault = 1 - P(normal) is a calibrated anomaly-detection score (P2.2 —
+        far stronger than the raw AE/fused scores: ROC-AUC ~0.93 vs ~0.55).
+        (None, 0.0, 0.0) when no classifier is loaded."""
+        if self._fault_clf is None or not TORCH_AVAILABLE:
+            return None, 0.0, 0.0
+        x = (features - self._fault_mean) / (self._fault_std + 1e-8)
+        with torch.no_grad():
+            probs = torch.softmax(self._fault_clf(torch.FloatTensor(x).unsqueeze(0)), dim=-1)[0]
+        idx = int(torch.argmax(probs).item())
+        conf = float(probs[idx].item())
+        p_fault = float(1.0 - probs[0].item())
+        name = Config.FAULT_CLASSES[idx] if idx < len(Config.FAULT_CLASSES) else "Unknown System Stress"
+        return name, conf, p_fault
 
     def _fingerprint_anomaly(self, urgency: float, top_contributor: str, current_temp: float) -> str:
         """Map abstract ML scores to physical fault signatures."""

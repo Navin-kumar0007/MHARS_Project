@@ -192,6 +192,35 @@ if TORCH_AVAILABLE:
             last = out[:, -1, :]
             return self.head(last).squeeze(-1)
 
+    class FaultClassifier(nn.Module):
+        """
+        P2.4 — Supervised fault-type classifier.
+
+        Replaces the rule-based ``_fingerprint_anomaly`` heuristic with a learned
+        model that maps a per-tick feature vector (temperature dynamics + the
+        per-model anomaly scores + urgency) to a concrete fault class. Trained on
+        the serving distribution with each anomaly type injected on a schedule, so
+        it predicts the actual failure mode (heat spike, bearing wear, fan
+        blockage, sensor drift, power surge) with a calibrated confidence.
+        """
+        def __init__(self, n_features=10, n_classes=6, hidden=32, dropout=0.2):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(n_features, hidden), nn.ReLU(), nn.Dropout(dropout),
+                nn.Linear(hidden, hidden // 2), nn.ReLU(),
+                nn.Linear(hidden // 2, n_classes),
+            )
+
+        def forward(self, x):
+            return self.net(x)               # logits (batch, n_classes)
+
+        def predict(self, x):
+            """Return (class_idx, confidence) for a single normalized feature row."""
+            with torch.no_grad():
+                probs = torch.softmax(self.forward(x), dim=-1)
+                conf, idx = torch.max(probs, dim=-1)
+            return int(idx.item()), float(conf.item())
+
     try:
         from stage2_ml.tft_predictor import TFTPredictor
     except ImportError:
@@ -224,6 +253,10 @@ else:
             raise ImportError("PyTorch required: pip install torch")
 
     class RULPredictor:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch required: pip install torch")
+
+    class FaultClassifier:
         def __init__(self, *args, **kwargs):
             raise ImportError("PyTorch required: pip install torch")
 

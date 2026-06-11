@@ -1,15 +1,16 @@
 """
-P1.5 — Train a direct multi-horizon thermal forecaster.
+P1.5 + P2.1 — Train a direct multi-horizon *quantile* thermal forecaster.
 
-The previous LSTM emitted a single 1-step-ahead value while the UI claimed a
-"+10 min forecast". This trains ThermalLSTMv2 with output_horizon=H so it
-predicts the next H normalized temps (t+1 … t+H) directly — a real forward
-trajectory. Trained on the serving distribution (captured from the live
-pipeline over gym_env), consistent with P1.1.
+ThermalLSTMv2 head emits H * Q values (reshaped to (H, Q)) so it predicts, for
+each of the next H steps, the p10/p50/p90 quantiles directly — a real forward
+trajectory (p50) WITH a native uncertainty band (p10..p90), trained by the
+pinball/quantile loss. This preserves the P1.5 projection and supplies the
+P2.1 uncertainty without MC-Dropout. Trained on the serving distribution
+(captured from the live pipeline over gym_env), consistent with P1.1.
 
 Run:  python3 tools/train_forecaster.py
 """
-import os, sys
+import os, sys, json
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,9 +28,19 @@ from stage1_simulation.gym_env import ThermalEnv
 
 WIN = Config.LSTM_WINDOW
 H = Config.LSTM_FORECAST_HORIZON
+Q = Config.LSTM_QUANTILES
 MODELS = os.path.join(ROOT, "models")
 STEPS = 2500
 torch.manual_seed(Config.SEED); np.random.seed(Config.SEED)
+
+
+def pinball_loss(pred_hq, target_h):
+    """pred_hq: (B,H,Q)  target_h: (B,H)  → mean pinball loss over H and Q."""
+    losses = []
+    for qi, q in enumerate(Q):
+        err = target_h - pred_hq[:, :, qi]
+        losses.append(torch.max((q - 1) * err, q * err))
+    return torch.stack(losses, dim=-1).mean()
 
 
 def collect_seq(machine_id, n_steps):
@@ -62,31 +73,39 @@ def main():
         print(f"  [machine {mid}] {len(w)} windows")
     X = np.array(X, dtype=np.float32)          # (N,12,5)
     Y = np.array(Y, dtype=np.float32)          # (N,H)
-    print(f"Pooled: X={X.shape} Y={Y.shape} (horizon={H})")
+    nq = len(Q)
+    print(f"Pooled: X={X.shape} Y={Y.shape} (horizon={H}, quantiles={Q})")
 
     model = ThermalLSTMv2(input_size=5, hidden_size=Config.LSTM_HIDDEN_V2,
-                          num_layers=Config.LSTM_LAYERS_V2, output_horizon=H)
+                          num_layers=Config.LSTM_LAYERS_V2, output_horizon=H * nq)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
-    lossf = nn.MSELoss()
     dl = DataLoader(TensorDataset(torch.tensor(X), torch.tensor(Y)), batch_size=256, shuffle=True)
     model.train()
-    for ep in range(45):
+    for ep in range(50):
         tot = 0.0
         for xb, yb in dl:
-            opt.zero_grad(); pred = model(xb); loss = lossf(pred, yb)
+            opt.zero_grad()
+            pred = model(xb).reshape(-1, H, nq)         # (B,H,Q)
+            loss = pinball_loss(pred, yb)
             loss.backward(); opt.step(); tot += loss.item() * len(xb)
         if ep % 10 == 9:
-            print(f"  epoch {ep+1}/45  mse={tot/len(X):.6f}")
+            print(f"  epoch {ep+1}/50  pinball={tot/len(X):.6f}")
     model.eval()
 
-    # Per-horizon RMSE (denormalized-agnostic, in normalized units)
     with torch.no_grad():
-        pred = model(torch.tensor(X)).numpy()
-    rmse_per_h = np.sqrt(((pred - Y) ** 2).mean(axis=0))
-    print("  per-step RMSE (norm):", " ".join(f"{r:.4f}" for r in rmse_per_h))
+        pred = model(torch.tensor(X)).reshape(-1, H, nq).numpy()
+    mid = nq // 2
+    rmse_per_h = np.sqrt(((pred[:, :, mid] - Y) ** 2).mean(axis=0))
+    # Empirical coverage of the p10..p90 band on the training set.
+    cov = ((Y >= pred[:, :, 0]) & (Y <= pred[:, :, -1])).mean()
+    print("  p50 per-step RMSE (norm):", " ".join(f"{r:.4f}" for r in rmse_per_h))
+    print(f"  p10–p90 empirical coverage: {cov:.3f} (target {Q[-1]-Q[0]:.2f})")
 
     torch.save(model.state_dict(), os.path.join(MODELS, "lstm_v2.pt"))
-    print(f"\n✓ Multi-horizon forecaster (H={H}) saved → models/lstm_v2.pt")
+    with open(os.path.join(MODELS, "lstm_v2_meta.json"), "w") as f:
+        json.dump({"horizon": H, "quantiles": Q, "input_size": 5,
+                   "hidden_size": Config.LSTM_HIDDEN_V2}, f, indent=2)
+    print(f"\n✓ Multi-horizon quantile forecaster (H={H}, Q={nq}) saved → models/lstm_v2.pt")
 
 
 if __name__ == "__main__":
