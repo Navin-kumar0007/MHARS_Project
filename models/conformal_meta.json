@@ -1,11 +1,11 @@
 {
   "coverage": 0.9,
-  "quantile": 0.11529010534286499,
-  "online_quantile": 0.11619010534288153,
-  "n_calibration_samples": 3887,
-  "n_predictions": 3887,
-  "n_covered": 3498,
-  "empirical_coverage": 0.8999,
+  "quantile": 0.011898994445800781,
+  "online_quantile": 0.011898994445800781,
+  "n_calibration_samples": 1493,
+  "n_predictions": 0,
+  "n_covered": 0,
+  "empirical_coverage": 0.0,
   "adaptive": true,
   "adaptive_lr": 0.003
 }

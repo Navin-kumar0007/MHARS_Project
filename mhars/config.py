@@ -81,7 +81,13 @@ class Config:
     IF_CONTAMINATION        = 0.03  # Isolation Forest expected noise ratio
     AE_THRESHOLD_PERCENTILE = 95    # Autoencoder anomaly threshold percentile
     LSTM_WINDOW             = 12    # sliding window size for LSTM
-    LSTM_PREDICTION_HORIZON_S = 1   # LSTM predicts this many seconds ahead (at 1Hz sampling)
+    LSTM_PREDICTION_HORIZON_S = 1   # next-step horizon for the anomaly score (1Hz)
+    # P1.5: direct multi-horizon forecast — model predicts the next H steps so the
+    # dashboard shows a real forward trajectory (not a single 1-step point).
+    LSTM_FORECAST_HORIZON   = 10    # steps ahead (seconds at 1Hz)
+    # P2.1: per-step quantiles → native uncertainty band (replaces MC-Dropout).
+    # Forecaster head emits H * len(LSTM_QUANTILES) values, reshaped to (H, Q).
+    LSTM_QUANTILES          = [0.1, 0.5, 0.9]   # p10 / p50 / p90
 
     # ── PPO training ──────────────────────────────────────────────────────────
     PPO_TIMESTEPS    = 500_000
@@ -120,6 +126,9 @@ class Config:
     IF_ONLINE_RETRAIN       = True   # Toggle online Isolation Forest retraining
     IF_RETRAIN_INTERVAL     = 500    # Retrain every N samples (was 100, too frequent)
     IF_COLD_START_SAMPLES   = 50     # Skip IF pickle until online retrain fires once
+    # P3.1: IF.decision_function dominated per-tick latency (~73%). 50 trees on a
+    # 5-feature stream matches 100 within noise and roughly halves traversal cost.
+    IF_N_ESTIMATORS         = 50
 
     # ── Phase 2: Anomaly detection damping (replaces blanket CPU/Server bypass) ──
     # Factor ∈ (0, 1] applied to IF/AE/Vib scores per machine type.
@@ -140,6 +149,16 @@ class Config:
     # ── Phase 2: RUL Prediction ──────────────────────────────────────────────
     RUL_MODEL_V2         = os.path.join(MODELS_DIR, 'rul_predictor_v2.pt')
     RUL_MAX_CYCLES       = 125   # piece-wise linear cap per NASA convention
+
+    # ── P2.4: Supervised fault classifier ────────────────────────────────────
+    FAULT_CLASSIFIER     = os.path.join(MODELS_DIR, 'fault_classifier.pt')
+    FAULT_CLASSIFIER_META = os.path.join(MODELS_DIR, 'fault_classifier_meta.json')
+    # Index order == training label encoding (0 = normal).
+    FAULT_CLASSES        = ["Normal Operations", "Heat Spike", "Bearing Wear",
+                            "Fan Blockage", "Sensor Drift", "Power Surge"]
+    FAULT_ANOMALY_KEYS   = ["normal", "temperature_spike", "bearing_wear",
+                            "fan_blockage", "sensor_drift", "power_surge"]
+    FAULT_MIN_CONFIDENCE = 0.55  # below this → fall back to rule-based fingerprint
 
     # ── Phase 2: SAC Agent ───────────────────────────────────────────────────
     SAC_MODEL            = os.path.join(MODELS_DIR, 'sac_thermal.zip')

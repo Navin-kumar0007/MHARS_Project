@@ -40,12 +40,22 @@ from starlette.concurrency import run_in_threadpool
 from mhars.core import MHARS
 from mhars.system_health import SystemHealthMonitor
 from stage1_simulation.gym_env import ThermalEnv, MACHINE_PROFILES
+from mhars.share_links import ShareLinkManager
+from mhars.report_generator import ReportGenerator
 
 app = FastAPI(
     title="MHARS API",
     description="Production-grade thermal monitoring and AI control API",
     version="2.1.0"
 )
+
+# ── Runtime configuration (env-driven) ──────────────────────────────────────
+def _env_flag(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
+
+MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "").strip()
+MHARS_REQUIRE_AUTH = _env_flag("MHARS_REQUIRE_AUTH", False)
+MHARS_SYNTHETIC_MODE = _env_flag("MHARS_SYNTHETIC_MODE", False)
 
 # ── CORS (#11 fix: configurable origins, no wildcard in production) ──────────
 CORS_ORIGINS = os.environ.get("MHARS_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,null").split(",")
@@ -57,40 +67,106 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Authentication ─────────────────────────────────────────────────────────────
-# Set MHARS_API_KEY environment variable to enable API key protection.
-# Set MHARS_REQUIRE_AUTH=true to strictly enforce authentication.
-MHARS_API_KEY = os.environ.get("MHARS_API_KEY", "")
-MHARS_REQUIRE_AUTH = os.environ.get("MHARS_REQUIRE_AUTH", "false").lower() == "true"
-MHARS_SYNTHETIC_MODE = os.environ.get("MHARS_SYNTHETIC_MODE", "false").lower() == "true"
+share_manager = ShareLinkManager()
 
-async def verify_api_key(api_key: str = Header(None, alias="X-API-Key")):
-    """Verify API key for HTTP routes.
-    
-    Fix #12: Simplified, consistent logic:
-    - If MHARS_API_KEY is set, it is ALWAYS checked (whether required or optional).
-    - If MHARS_REQUIRE_AUTH is true and no key is configured, it's a server error.
-    """
-    if MHARS_REQUIRE_AUTH and not MHARS_API_KEY:
-        raise HTTPException(status_code=500, detail="Server misconfiguration: MHARS_REQUIRE_AUTH is true but MHARS_API_KEY is not set.")
-    
-    if MHARS_API_KEY:
-        # Key is configured: always validate if a key is provided OR if auth is required
-        if not api_key:
-            if MHARS_REQUIRE_AUTH:
-                raise HTTPException(status_code=403, detail="API key required (X-API-Key header)")
-            return  # No key provided, not required, pass through
-        if api_key != MHARS_API_KEY:
-            raise HTTPException(status_code=403, detail="Invalid API key")
+from mhars.auth import authenticate_user, create_access_token, decode_access_token, get_user, ACCESS_TOKEN_EXPIRE_MINUTES
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from datetime import timedelta
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
+
+async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)):
+    # Dev mode: auth disabled and no API key set → act as a default admin.
+    if not MHARS_REQUIRE_AUTH and not MHARS_API_KEY:
+        return {"username": "dev", "role": "admin"}
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+    username: str = payload.get("sub")
+    if username is None:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+    user = get_user(username)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+def require_role(allowed_roles: list[str]):
+    async def role_checker(current_user: dict = Depends(get_current_user)):
+        if current_user["role"] not in allowed_roles and current_user["role"] != "admin":
+            raise HTTPException(status_code=403, detail="Operation not permitted")
+        return current_user
+    return role_checker
+
+@app.post("/api/auth/login")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(status_code=400, detail="Incorrect username or password")
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user["username"], "role": user["role"]}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer", "role": user["role"]}
+
+@app.get("/api/auth/me")
+async def read_users_me(current_user: dict = Depends(get_current_user)):
+    return current_user
+
+
+# ── User management (admin only) ─────────────────────────────────────────────
+from mhars.auth import list_users as _list_users, update_user_role as _update_role, \
+    delete_user as _delete_user, create_user as _create_user
+
+class NewUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"
+
+class RoleUpdateRequest(BaseModel):
+    role: str
+
+@app.get("/api/users", dependencies=[Depends(require_role(["admin"]))])
+async def get_users():
+    return {"users": _list_users()}
+
+@app.post("/api/users", dependencies=[Depends(require_role(["admin"]))])
+async def add_user(req: NewUserRequest):
+    if req.role not in ("admin", "operator", "viewer"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    if not _create_user(req.username, req.password, req.role):
+        raise HTTPException(status_code=409, detail="User already exists")
+    return {"status": "success"}
+
+@app.post("/api/users/{username}/role", dependencies=[Depends(require_role(["admin"]))])
+async def change_user_role(username: str, req: RoleUpdateRequest):
+    if req.role not in ("admin", "operator", "viewer"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    if not _update_role(username, req.role):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "success"}
+
+@app.delete("/api/users/{username}", dependencies=[Depends(require_role(["admin"]))])
+async def remove_user(username: str, current_user: dict = Depends(get_current_user)):
+    if username == current_user["username"]:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    if not _delete_user(username):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "success"}
+
 
 def verify_ws_token(token: str) -> bool:
-    """Verify API key for WebSocket connections (via query param)."""
-    if MHARS_REQUIRE_AUTH:
-        if not MHARS_API_KEY: return False
-        return token == MHARS_API_KEY
-    if MHARS_API_KEY and token:
-        return token == MHARS_API_KEY
-    return True
+    """Verify WebSocket connection credentials.
+
+    Accepts either a valid JWT or the configured static API key. When auth is
+    not required and no API key is set (dev mode), connections are allowed.
+    """
+    if not MHARS_REQUIRE_AUTH and not MHARS_API_KEY:
+        return True
+    if MHARS_API_KEY and token == MHARS_API_KEY:
+        return True
+    return decode_access_token(token) is not None
 
 @app.on_event("startup")
 async def startup_event():
@@ -140,6 +216,10 @@ class SystemState:
 
         # Live mode: read real hardware temp instead of simulation
         self.live_mode: bool = False
+
+    @property
+    def machine_profile(self) -> Dict[str, Any]:
+        return MACHINE_PROFILES[self.machine_type_id]
 
     def reinitialize(self, machine_type_id: int):
         """Switch to a different machine type — reinitializes all AI models."""
@@ -270,6 +350,12 @@ def apply_anomaly_to_temp(current_temp: float) -> float:
 
 
 # ── REST Endpoints ─────────────────────────────────────────────────────────────
+@app.get("/api/status")
+async def get_status():
+    """Lightweight liveness probe (used by Docker healthcheck)."""
+    return {"status": "ok", "live_mode": state.live_mode}
+
+
 @app.get("/api/system_status")
 async def get_system_status():
     """Returns the current machine profile, model status, and available anomalies."""
@@ -296,7 +382,7 @@ async def get_system_status():
     }
 
 
-@app.post("/api/inject_anomaly", dependencies=[Depends(verify_api_key)])
+@app.post("/api/inject_anomaly", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def inject_anomaly(req: AnomalyRequest):
     """Inject one of 5 anomaly types for live demonstration."""
     # Rate limiting (#13)
@@ -327,7 +413,7 @@ async def inject_anomaly(req: AnomalyRequest):
     }
 
 
-@app.post("/api/switch_machine", dependencies=[Depends(verify_api_key)])
+@app.post("/api/switch_machine", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def switch_machine(req: MachineRequest):
     """Switch to a different machine type. Reinitializes the entire AI pipeline."""
     if req.machine_type_id not in MACHINE_PROFILES:
@@ -344,7 +430,7 @@ async def switch_machine(req: MachineRequest):
     }
 
 
-@app.post("/api/reset", dependencies=[Depends(verify_api_key)])
+@app.post("/api/reset", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def reset_system():
     """Reset the environment to idle state without changing machine type."""
     state.env.reset()
@@ -368,7 +454,7 @@ async def get_alert_history():
     return {"alerts": list(state.alert_history)}
 
 
-@app.post("/api/toggle_mode", dependencies=[Depends(verify_api_key)])
+@app.post("/api/toggle_mode", dependencies=[Depends(require_role(["operator", "admin"]))])
 async def toggle_mode():
     """Toggle between live hardware mode and simulation demo mode."""
     state.live_mode = not state.live_mode
@@ -406,6 +492,148 @@ async def get_system_health():
 async def get_registry():
     """Return the list of all registered nodes in the federated network."""
     return state.mhars._registry.list_all_nodes()
+
+
+# ── Share Links Endpoints ──────────────────────────────────────────────────────
+class ShareLinkRequest(BaseModel):
+    label: str
+    expires_in_hours: int = 24
+
+@app.post("/api/share/create", dependencies=[Depends(require_role(["admin", "operator"]))])
+async def create_share_link(req: ShareLinkRequest, current_user: dict = Depends(get_current_user)):
+    """Create a new public share link."""
+    try:
+        token = share_manager.create_link(current_user["username"], req.label, req.expires_in_hours)
+        return {"status": "success", "token": token}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/share/list", dependencies=[Depends(require_role(["admin", "operator"]))])
+async def list_share_links(current_user: dict = Depends(get_current_user)):
+    """List all active share links."""
+    links = share_manager.list_links()
+    # Operators can only see their own links
+    if current_user["role"] == "operator":
+        links = [link for link in links if link.get("creator") == current_user["username"]]
+    return {"status": "success", "links": links}
+
+@app.post("/api/share/revoke/{token}", dependencies=[Depends(require_role(["admin", "operator"]))])
+async def revoke_share_link(token: str, current_user: dict = Depends(get_current_user)):
+    """Revoke a share link."""
+    # Ensure they own it or are admin
+    links = share_manager.list_links()
+    link_data = next((l for l in links if l["token"] == token), None)
+    
+    if not link_data:
+         raise HTTPException(status_code=404, detail="Link not found")
+         
+    if current_user["role"] != "admin" and link_data["creator"] != current_user["username"]:
+        raise HTTPException(status_code=403, detail="Cannot revoke another user's link")
+        
+    if share_manager.revoke_link(token):
+        return {"status": "success", "message": "Link revoked."}
+    raise HTTPException(status_code=404, detail="Link not found")
+
+@app.get("/api/share/validate/{token}")
+async def validate_share_link(token: str):
+    """Validate a public share token (unauthenticated endpoint)."""
+    is_valid = share_manager.validate_and_record_access(token)
+    if is_valid:
+        return {"status": "success", "valid": True}
+    raise HTTPException(status_code=401, detail="Invalid or expired link")
+
+
+@app.get("/api/share/{token}")
+async def get_shared_status(token: str):
+    """Public read-only status snapshot for a valid share token (no login)."""
+    if not share_manager.validate_and_record_access(token):
+        raise HTTPException(status_code=410, detail="Invalid or expired link")
+
+    latest = state.telemetry_history[-1] if state.telemetry_history else {}
+    meta = latest.get("metadata", {}) or {}
+    profile = MACHINE_PROFILES[state.machine_type_id]
+    return {
+        "machine": profile.get("name", "Unknown"),
+        "current_temp": latest.get("current_temp"),
+        "health_score": meta.get("health_score"),
+        "health_trend": meta.get("health_trend"),
+        "action": latest.get("action"),
+        "alert": latest.get("alert"),
+        "fault_type": meta.get("fault_type"),
+        "thresholds": latest.get("thresholds"),
+        "timestamp": latest.get("timestamp"),
+    }
+
+
+# ── Report Generation ──────────────────────────────────────────────────────────
+from fastapi.responses import HTMLResponse
+
+@app.get("/api/report/html", dependencies=[Depends(require_role(["admin", "operator", "viewer"]))])
+async def get_html_report():
+    """Generates a downloadable HTML diagnostic report."""
+    html_content = ReportGenerator.generate_html_report(state)
+    return HTMLResponse(content=html_content, status_code=200)
+
+
+@app.get("/api/report/download", dependencies=[Depends(require_role(["admin", "operator", "viewer"]))])
+async def download_html_report():
+    """Alias for /api/report/html — forces a file download in the browser."""
+    html_content = ReportGenerator.generate_html_report(state)
+    headers = {"Content-Disposition": "attachment; filename=mhars_report.html"}
+    return HTMLResponse(content=html_content, status_code=200, headers=headers)
+
+
+# ── Advanced Analytics Endpoints (Phase 4B) ─────────────────────────────────────
+def _latest_meta() -> Dict[str, Any]:
+    """Return the metadata dict of the most recent telemetry tick, or {}."""
+    if not state.telemetry_history:
+        raise HTTPException(status_code=503, detail="No telemetry yet — start the stream first.")
+    return state.telemetry_history[-1].get("metadata", {}) or {}
+
+
+@app.get("/api/health_score", dependencies=[Depends(get_current_user)])
+async def get_health_score():
+    """Composite 0-100 health score with per-component breakdown."""
+    meta = _latest_meta()
+    return {
+        "score": meta.get("health_score"),
+        "trend": meta.get("health_trend"),
+        "breakdown": meta.get("health_breakdown", {}),
+    }
+
+
+@app.get("/api/trends", dependencies=[Depends(get_current_user)])
+async def get_trends():
+    """CUSUM/EWMA statistical trend analysis."""
+    meta = _latest_meta()
+    return {
+        "trend_stats": meta.get("trend_stats", {}),
+        "concept_drift_detected": meta.get("concept_drift_detected", False),
+    }
+
+
+@app.get("/api/explainability", dependencies=[Depends(get_current_user)])
+async def get_explainability():
+    """Feature attribution (XAI) for the most recent decision."""
+    meta = _latest_meta()
+    return {
+        "feature_importance": meta.get("feature_importance", {}),
+        "contributions": meta.get("contributions", {}),
+        "top_contributor": meta.get("top_contributor"),
+        "fault_type": meta.get("fault_type"),
+    }
+
+
+@app.get("/api/uncertainty", dependencies=[Depends(get_current_user)])
+async def get_uncertainty():
+    """MC-Dropout / conformal prediction uncertainty metrics."""
+    meta = _latest_meta()
+    return {
+        "prediction_interval": meta.get("prediction_interval", {}),
+        "conformal_boost": meta.get("conformal_boost"),
+        "urgency_confidence": meta.get("urgency_confidence"),
+        "urgency_variance": meta.get("urgency_variance"),
+    }
 
 
 # ── WebSocket Telemetry Stream ─────────────────────────────────────────────────

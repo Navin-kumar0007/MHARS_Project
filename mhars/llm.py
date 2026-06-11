@@ -14,7 +14,7 @@ You are a maintenance assistant for industrial machines. Write exactly two plain
 Situation:
 - Machine: {machine_type}
 - Current temperature: {current_temp:.1f}°C
-- Predicted temperature in 10 min: {predicted_temp:.1f}°C
+- Predicted temperature (short-term): {predicted_temp:.1f}°C
 - Anomaly score: {anomaly_score:.2f} (0=normal, 1=critical)
 - Action taken by system: {action_name}
 - Urgency: {urgency:.2f}
@@ -167,11 +167,11 @@ class AlertGenerator:
 
         delta = predicted_temp - current_temp
         if delta > 5:
-            trend = f"rising rapidly (+{delta:.1f}°C predicted in 10 min)"
+            trend = f"rising rapidly (+{delta:.1f}°C short-term)"
         elif delta > 0:
-            trend = f"slowly rising (+{delta:.1f}°C predicted in 10 min)"
+            trend = f"slowly rising (+{delta:.1f}°C short-term)"
         elif delta < -5:
-            trend = f"cooling down ({delta:.1f}°C predicted in 10 min)"
+            trend = f"cooling down ({delta:.1f}°C short-term)"
         else:
             trend = "stable"
 

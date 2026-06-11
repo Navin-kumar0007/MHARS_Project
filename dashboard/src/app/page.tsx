@@ -1,549 +1,596 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTelemetry } from "@/components/TelemetryProvider";
 import {
-  LineChart,
-  Line,
   AreaChart,
   Area,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
   ReferenceLine,
 } from "recharts";
 import {
+  Thermometer,
   Cpu,
-  Fan,
   Wifi,
+  Timer,
   ShieldAlert,
-  Zap,
+  Activity,
+  FileDown,
   Flame,
   Settings,
   Wind,
   Radio,
   BatteryWarning,
   RotateCcw,
-  Network,
+  HeartPulse,
+  Clock,
+  TrendingUp,
+  Bell,
+  Wrench,
+  Zap,
+  Check,
+  Gauge,
+  Sparkles,
 } from "lucide-react";
+import {
+  Card,
+  CardTitle,
+  StatCard,
+  Badge,
+  PageHeader,
+  Progress,
+  Awaiting,
+  CHART,
+  tooltipStyle,
+  tooltipLabelStyle,
+  healthColor,
+  healthLabel,
+} from "@/components/ui";
 
-// ── Helper: format time label ─────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────────
 function timeLabel(ts: number) {
-  return new Date(ts * 1000).toLocaleTimeString([], {
-    hour12: false,
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return new Date(ts * 1000).toLocaleTimeString([], { hour12: false, minute: "2-digit", second: "2-digit" });
 }
 
-// ── Helper: action color mapping ──────────────────────────────────────────────
-function getActionStyle(action: string) {
+function decisionInfo(action: string | undefined) {
   switch (action) {
     case "do-nothing":
-      return "text-emerald-400 border-emerald-500/30 bg-emerald-500/10";
-    case "increase-fan":
+      return { text: "All Clear", tone: "good", color: "#34d399", tip: "No action needed — machine is healthy." };
     case "fan+":
-      return "text-amber-400 border-amber-500/30 bg-amber-500/10";
+    case "increase-fan":
+      return { text: "Cooling Up", tone: "warn", color: "#fbbf24", tip: "AI increased cooling to bring temperature down." };
     case "throttle":
-      return "text-orange-400 border-orange-500/30 bg-orange-500/10";
+      return { text: "Throttling", tone: "warn", color: "#fb923c", tip: "AI reduced workload to limit heat." };
     case "alert":
-      return "text-yellow-400 border-yellow-500/30 bg-yellow-500/10";
-    case "emergency-shutdown":
+      return { text: "Warning", tone: "warn", color: "#fbbf24", tip: "AI raised a warning — operator attention advised." };
     case "shutdown":
-      return "text-rose-500 border-rose-500/30 bg-rose-500/10";
+    case "emergency-shutdown":
+      return { text: "Shutdown", tone: "bad", color: "#ef4444", tip: "AI triggered an emergency stop to prevent damage." };
     default:
-      return "text-gray-400 border-gray-500/30 bg-gray-500/10";
+      return { text: "Standby", tone: "neutral", color: "#5d6b82", tip: "Waiting for telemetry." };
   }
 }
 
-// ── Temperature Gauge (SVG) ───────────────────────────────────────────────────
-function TemperatureGauge({
-  value,
-  idle,
-  safeMax,
-  critical,
-}: {
-  value: number;
-  idle: number;
-  safeMax: number;
-  critical: number;
-}) {
-  // Map temperature to angle (0-180 degrees)
-  const minTemp = Math.max(idle - 10, 0);
-  const maxTemp = critical + 15;
-  const clampedValue = Math.max(minTemp, Math.min(maxTemp, value));
-  const ratio = (clampedValue - minTemp) / (maxTemp - minTemp);
-  const angle = ratio * 180;
+function routeInfo(route: string | undefined) {
+  if (route === "edge") return { color: "#22d3ee", tip: "Handled locally on the machine — fastest, used when urgent." };
+  if (route === "cloud") return { color: "#60a5fa", tip: "Deferred to the cloud — used when there is time." };
+  if (route === "both") return { color: "#818cf8", tip: "Run in both places at once for safety." };
+  return { color: "#5d6b82", tip: "Where the AI runs its decision." };
+}
 
-  // Zone boundaries in degrees
-  const safeAngle = ((safeMax - minTemp) / (maxTemp - minTemp)) * 180;
-  const critAngle = ((critical - minTemp) / (maxTemp - minTemp)) * 180;
+const ANOMALY_BUTTONS = [
+  { type: "temperature_spike", label: "Heat Spike", icon: Flame, color: "#ef4444", tip: "Sudden +8°C overload." },
+  { type: "bearing_wear", label: "Bearing Wear", icon: Settings, color: "#fbbf24", tip: "Gradual friction heat over 10s." },
+  { type: "fan_blockage", label: "Fan Blockage", icon: Wind, color: "#fb923c", tip: "Cooling failure for 15s." },
+  { type: "sensor_drift", label: "Sensor Drift", icon: Radio, color: "#22d3ee", tip: "Faulty sensor adds ±3°C noise." },
+  { type: "power_surge", label: "Power Surge", icon: BatteryWarning, color: "#e879f9", tip: "Electrical fault, +12°C spike." },
+];
 
-  // Needle color
-  const needleColor =
-    value >= critical
-      ? "#ef4444"
-      : value >= safeMax
-      ? "#f59e0b"
-      : "#10b981";
+// Only the four trained modalities with real signal. CNN (Heat Camera) and
+// Audio are gated out until trained on real data (P1.3), so they are not shown.
+const XAI_ROWS: { key: string; label: string; meaning: string; model: string }[] = [
+  { key: "trend_forecast", label: "Heat Trend", meaning: "Is temperature rising?", model: "LSTM forecaster" },
+  { key: "pattern_check", label: "Pattern Match", meaning: "Does the signal look normal?", model: "Autoencoder" },
+  { key: "outlier_scan", label: "Odd Reading", meaning: "Any out-of-range value?", model: "Isolation Forest" },
+  { key: "vibration", label: "Vibration", meaning: "Shaking / bearing wear?", model: "Vibration model" },
+];
 
+function statusColor(s: string) {
+  return s === "critical" ? "#f87171" : s === "warning" ? "#fbbf24" : "#34d399";
+}
+
+function fmtUptime(sec: number) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  return `${h ? h + "h " : ""}${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
+}
+
+function KpiTile({ icon: Icon, label, value, tip }: { icon: React.ElementType; label: string; value: string; tip: string }) {
   return (
-    <div className="flex flex-col items-center">
-      <svg viewBox="0 0 200 120" className="w-full max-w-[260px]">
-        {/* Green zone (idle to safe) */}
-        <path
-          d={describeArc(100, 100, 80, 180, 180 + safeAngle)}
-          fill="none"
-          stroke="#10b981"
-          strokeWidth="12"
-          strokeLinecap="round"
-          opacity="0.3"
-        />
-        {/* Amber zone (safe to critical) */}
-        <path
-          d={describeArc(100, 100, 80, 180 + safeAngle, 180 + critAngle)}
-          fill="none"
-          stroke="#f59e0b"
-          strokeWidth="12"
-          strokeLinecap="round"
-          opacity="0.3"
-        />
-        {/* Red zone (above critical) */}
-        <path
-          d={describeArc(100, 100, 80, 180 + critAngle, 360)}
-          fill="none"
-          stroke="#ef4444"
-          strokeWidth="12"
-          strokeLinecap="round"
-          opacity="0.3"
-        />
-        {/* Needle */}
-        <line
-          x1="100"
-          y1="100"
-          x2={100 + 65 * Math.cos((Math.PI * (180 + angle)) / 180)}
-          y2={100 + 65 * Math.sin((Math.PI * (180 + angle)) / 180)}
-          stroke={needleColor}
-          strokeWidth="3"
-          strokeLinecap="round"
-          style={{
-            filter: `drop-shadow(0 0 6px ${needleColor})`,
-            transition: "all 0.5s ease-out",
-          }}
-        />
-        {/* Center dot */}
-        <circle cx="100" cy="100" r="5" fill={needleColor} opacity="0.8" />
-        {/* Labels */}
-        <text x="20" y="108" fontSize="9" fill="#64748b">
-          {minTemp}°
-        </text>
-        <text x="170" y="108" fontSize="9" fill="#64748b">
-          {maxTemp}°
-        </text>
-      </svg>
-      <div className="text-center -mt-2">
-        <span
-          className="text-3xl font-black"
-          style={{ color: needleColor }}
-        >
-          {value.toFixed(1)}°C
-        </span>
+    <Card hover className="!p-3.5 flex items-center gap-3" title={tip}>
+      <div className="grid place-items-center w-9 h-9 rounded-lg bg-white/[0.04] shrink-0">
+        <Icon className="w-4 h-4 text-slate-400" />
       </div>
-    </div>
+      <div className="min-w-0">
+        <div className="eyebrow leading-tight">{label}</div>
+        <div className="metric text-sm text-slate-100 leading-tight mt-0.5">{value}</div>
+      </div>
+    </Card>
   );
 }
 
-// SVG arc helper
-function polarToCartesian(cx: number, cy: number, r: number, deg: number) {
-  const rad = (Math.PI / 180) * deg;
-  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-}
-function describeArc(
-  cx: number,
-  cy: number,
-  r: number,
-  startDeg: number,
-  endDeg: number
-) {
-  const start = polarToCartesian(cx, cy, r, endDeg);
-  const end = polarToCartesian(cx, cy, r, startDeg);
-  const largeArc = endDeg - startDeg > 180 ? 1 : 0;
-  return `M ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y}`;
-}
-
-// ── Anomaly Injection Buttons ─────────────────────────────────────────────────
-const ANOMALY_BUTTONS = [
-  { type: "temperature_spike", label: "Thermal Spike", icon: Flame, color: "rose" },
-  { type: "bearing_wear", label: "Bearing Wear", icon: Settings, color: "amber" },
-  { type: "fan_blockage", label: "Fan Blockage", icon: Wind, color: "orange" },
-  { type: "sensor_drift", label: "Sensor Drift", icon: Radio, color: "blue" },
-  { type: "power_surge", label: "Power Surge", icon: BatteryWarning, color: "fuchsia" },
-];
-
-const colorMap: Record<string, string> = {
-  rose: "bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border-rose-500/30",
-  amber: "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30",
-  orange: "bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border-orange-500/30",
-  blue: "bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/30",
-  fuchsia: "bg-fuchsia-500/10 hover:bg-fuchsia-500/20 text-fuchsia-400 border-fuchsia-500/30",
-};
-
-// ── Main Dashboard Page ───────────────────────────────────────────────────────
+// ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const { latest, history, injectAnomaly, resetSystem, systemStatus } =
-    useTelemetry();
+  const { latest, history, injectAnomaly, resetSystem, downloadReport, can, liveMode, isConnected } = useTelemetry();
+  const [clock, setClock] = useState("--:--:--");
+  const [uptime, setUptime] = useState(0);
+  const [acked, setAcked] = useState<Set<number>>(new Set());
+  const startRef = useRef(Date.now());
 
-  // Prepare chart data
-  const chartData = history.map((t) => ({
-    ...t,
-    time: timeLabel(t.timestamp),
-  }));
+  useEffect(() => {
+    const id = setInterval(() => {
+      setClock(new Date().toLocaleTimeString([], { hour12: false }));
+      setUptime((Date.now() - startRef.current) / 1000);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
 
-  const thresholds = latest?.thresholds || { idle: 40, safe_max: 80, critical: 95 };
+  const meta = latest?.metadata || {};
+  const th = latest?.thresholds || { idle: 40, safe_max: 80, critical: 95 };
+  const temp = latest?.current_temp;
+  const tColor =
+    temp != null ? (temp >= th.critical ? "#f87171" : temp >= th.safe_max ? "#fbbf24" : "#34d399") : "#5d6b82";
+  const decision = decisionInfo(latest?.action);
+  const route = routeInfo(latest?.route);
+  const sh = latest?.system_health;
+  const drift = !!meta.concept_drift_detected;
+
+  // Canonical composite health (same number the sidebar + analytics use)
+  const health = (meta.health_score ?? sh?.overall_score) as number | undefined;
+  const hColor = healthColor(health);
+
+  const concerned = latest?.action !== "do-nothing" || (latest?.urgency ?? 0) >= 0.7;
+  const fault = concerned && meta.fault_type && meta.fault_type !== "Normal Operations" ? meta.fault_type : null;
+  const faultConf = meta.fault_confidence as number | undefined;
+  const maint = meta.maintenance_plan as
+    | { status: string; urgency_level: string; action: string; window_start: string | null; window_end: string | null }
+    | undefined;
+
+  // Time-to-limit (RUL)
+  const rul = meta.rul_minutes as number | null | undefined;
+  let rulText = "Stable";
+  let rulColor = "#34d399";
+  if (rul != null && rul > 0) {
+    if (rul > 60) { rulText = ">1h"; rulColor = "#34d399"; }
+    else if (rul > 15) { rulText = `${Math.round(rul)}m`; rulColor = "#fbbf24"; }
+    else { rulText = `${Math.round(rul)}m`; rulColor = "#f87171"; }
+  }
+
+  // XAI contributions
+  let contrib = (meta.contributions || {}) as Record<string, number>;
+  if (!meta.contributions && latest) {
+    const raw: Record<string, number> = {
+      trend_forecast: latest.lstm_score || 0,
+      pattern_check: latest.ae_score || 0,
+      outlier_scan: latest.if_score || 0,
+      vibration: latest.vib_score || 0,
+      cnn_hotspot: 0,
+      audio: 0,
+    };
+    const total = Object.values(raw).reduce((a, b) => a + b, 0) || 1;
+    contrib = Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Math.round((v / total) * 100)]));
+  }
+  const topKey = meta.top_contributor as string | undefined;
+  const topRow = XAI_ROWS.find((r) => r.key === topKey);
+
+  const chartData = history.map((t) => ({ ...t, time: timeLabel(t.timestamp), detector: t.metadata?.anomaly_probability ?? 0 }));
+  const tempSpark = history.slice(-30).map((t) => t.current_temp);
+  const detectorP = meta.anomaly_probability as number | undefined;
+
+  // P1.5/P2.1: forward multi-horizon p50 trajectory + p10–p90 uncertainty band.
+  const fcTraj = (meta.forecast_trajectory_c as number[] | null) || null;
+  const fcBand = (meta.forecast_band_c as number[][] | null) || null;
+  const tempChartData = useMemo(() => {
+    const base = history.map((t, i) => ({
+      time: timeLabel(t.timestamp),
+      current_temp: t.current_temp as number | undefined,
+      lstm_prediction: t.lstm_prediction as number | undefined,
+      // anchor the projection line to the latest actual point so it connects
+      projection: i === history.length - 1 ? t.current_temp : (undefined as number | undefined),
+      bandLo: undefined as number | undefined,
+      bandHi: undefined as number | undefined,
+    }));
+    if (fcTraj && fcTraj.length && history.length) {
+      const lastTs = history[history.length - 1].timestamp;
+      fcTraj.forEach((v, i) => {
+        base.push({
+          time: timeLabel(lastTs + i + 1),
+          current_temp: undefined, lstm_prediction: undefined, projection: v,
+          bandLo: fcBand?.[i]?.[0], bandHi: fcBand?.[i]?.[1],
+        });
+      });
+    }
+    return base;
+  }, [history, fcTraj, fcBand]);
+
+  // KPIs
+  const kpis = useMemo(() => {
+    if (!history.length) return { peak: "--", events: 0, actions: 0, latency: "--" };
+    let peak = -Infinity, events = 0, actions = 0, latSum = 0;
+    let prevAnom: string | null = null;
+    for (const t of history) {
+      peak = Math.max(peak, t.current_temp);
+      latSum += t.latency_ms;
+      if (t.action && t.action !== "do-nothing") actions++;
+      if (t.active_anomaly && t.active_anomaly !== prevAnom) events++;
+      prevAnom = t.active_anomaly;
+    }
+    return {
+      peak: peak === -Infinity ? "--" : `${peak.toFixed(1)}°`,
+      events,
+      actions,
+      latency: `${(latSum / history.length).toFixed(0)}ms`,
+    };
+  }, [history]);
+
+  // Event log
+  const alarms = useMemo(() => {
+    const out: { id: number; time: string; sev: string; msg: string }[] = [];
+    history.forEach((t) => {
+      const sev = t.urgency >= 0.8 ? "critical" : t.urgency >= 0.5 ? "warning" : null;
+      const ft = t.metadata?.fault_type;
+      const isFault = ft && ft !== "Normal Operations";
+      if (sev || isFault) {
+        out.push({
+          id: t.timestamp,
+          time: timeLabel(t.timestamp),
+          sev: sev || "warning",
+          msg: isFault ? `Fault: ${ft}` : `High urgency ${t.urgency.toFixed(2)} → ${decisionInfo(t.action).text}`,
+        });
+      }
+    });
+    const dedup = out.filter((a, idx) => idx === 0 || a.msg !== out[idx - 1].msg);
+    return dedup.slice(-7).reverse();
+  }, [history]);
+
+  const maintColor =
+    maint?.urgency_level === "critical" ? "#f87171"
+    : maint?.urgency_level === "high" ? "#fb923c"
+    : maint?.urgency_level === "medium" ? "#fbbf24"
+    : maint?.urgency_level === "low" ? "#eab308"
+    : "#34d399";
 
   return (
-    <div className="p-6 space-y-6 relative overflow-hidden min-h-screen">
-      {/* Background Aurora Glow */}
-      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-teal-500/8 blur-[180px] rounded-full pointer-events-none" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-purple-600/8 blur-[180px] rounded-full pointer-events-none" />
-
+    <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
       {/* Header */}
-      <header className="relative z-10 flex items-center justify-between border-b border-slate-800/60 pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">Live Monitoring</h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Real-time sensor telemetry and AI response visualization
-          </p>
-        </div>
-        {latest?.active_anomaly && (
-          <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 px-4 py-2 rounded-full animate-pulse">
-            <ShieldAlert className="w-4 h-4 text-rose-400" />
-            <span className="text-sm font-medium text-rose-400">
-              Active: {latest.active_anomaly.replace("_", " ")} ({latest.anomaly_ticks_remaining}s)
-            </span>
-          </div>
-        )}
-        {latest?.metadata?.concept_drift_detected && (
-          <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-4 py-2 rounded-full animate-bounce">
-            <Radio className="w-4 h-4 text-amber-400" />
-            <span className="text-sm font-medium text-amber-400">
-              Concept Drift Detected
-            </span>
-          </div>
-        )}
-      </header>
-
-      {/* Top Row: Gauge + Action + Route */}
-      <div className="relative z-10 grid grid-cols-12 gap-5">
-        {/* Temperature Gauge */}
-        <div className="col-span-12 md:col-span-4 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-            <Cpu className="w-3.5 h-3.5" /> Temperature Gauge
-          </h2>
-          <TemperatureGauge
-            value={latest?.current_temp ?? thresholds.idle}
-            idle={thresholds.idle}
-            safeMax={thresholds.safe_max}
-            critical={thresholds.critical}
-          />
-          <div className="flex justify-between text-[10px] text-slate-500 mt-3 px-2">
-            <span>
-              Idle: <span className="text-emerald-400">{thresholds.idle}°C</span>
-            </span>
-            <span>
-              Safe: <span className="text-amber-400">{thresholds.safe_max}°C</span>
-            </span>
-            <span>
-              Critical: <span className="text-rose-400">{thresholds.critical}°C</span>
-            </span>
-          </div>
-        </div>
-
-        {/* RL Action Card */}
-        <div className="col-span-6 md:col-span-4">
-          <div
-            className={`h-full rounded-2xl p-5 border shadow-xl transition-colors duration-500 ${
-              latest ? getActionStyle(latest.action) : "bg-slate-900/50 border-slate-800"
-            }`}
+      <PageHeader icon={Activity} title="Operations Overview" subtitle={latest?.machine_type ? `Monitoring · ${latest.machine_type}` : "Real-time machine health monitoring"}>
+        <Badge tone={liveMode ? "bad" : "info"} className={liveMode ? "" : ""}>
+          <span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: liveMode ? "#f87171" : "#22d3ee", color: liveMode ? "#f87171" : "#22d3ee" }} />
+          {liveMode ? "LIVE · Real HW" : "DEMO · Sim"}
+        </Badge>
+        <Badge tone={isConnected ? "good" : "bad"}>{isConnected ? "Link OK" : "No Link"}</Badge>
+        <span className="metric text-xs text-slate-500 px-2">{clock}</span>
+        {can("download_report") && (
+          <button
+            onClick={() => downloadReport()}
+            title="Open a printable diagnostic report (save as PDF)."
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-teal-400/30 text-teal-300 bg-teal-400/10 hover:bg-teal-400/20 transition-colors"
           >
-            <div className="text-xs font-semibold uppercase tracking-wider opacity-70 mb-2 flex items-center gap-2">
-              <Fan className="w-4 h-4" /> RL Agent Action
-            </div>
-            <div className="text-3xl font-black uppercase tracking-tight">
-              {latest?.action || "STANDBY"}
-            </div>
-            <p className="text-xs opacity-60 mt-3">
-              Urgency: {(latest?.urgency ?? 0).toFixed(3)}
-            </p>
-          </div>
-        </div>
+            <FileDown className="w-3.5 h-3.5" /> Report
+          </button>
+        )}
+      </PageHeader>
 
-        {/* Routing Card */}
-        <div className="col-span-6 md:col-span-4">
-          <div className="h-full bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl relative overflow-hidden">
-            {latest?.route === "edge" && (
-              <div className="absolute inset-0 bg-teal-500/5 animate-pulse pointer-events-none" />
-            )}
-            {latest?.route === "cloud" && (
-              <div className="absolute inset-0 bg-blue-500/5 animate-pulse pointer-events-none" />
-            )}
-            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Wifi className="w-4 h-4" /> Inference Routing
-            </div>
-            <div
-              className={`text-3xl font-black uppercase tracking-tight ${
-                latest?.route === "edge"
-                  ? "text-teal-400"
-                  : latest?.route === "cloud"
-                  ? "text-blue-400"
-                  : "text-purple-400"
-              }`}
-            >
-              {latest?.route || "NONE"}
-            </div>
-            <div className="flex items-center justify-between mt-3">
-              <span className="text-xs text-slate-500">
-                Source: <span className="text-slate-300">{latest?.llm_source || "—"}</span>
+      {/* Critical alerts */}
+      {(fault || drift) && (
+        <div className="flex flex-wrap gap-3">
+          {fault && (
+            <Card className="!p-3 flex items-center gap-2.5 border-rose-500/30 bg-rose-500/5" title="The fusion layer matched this failure signature.">
+              <ShieldAlert className="w-4 h-4 text-rose-400" />
+              <span className="text-sm text-rose-200">
+                Identified fault: <b className="font-semibold">{fault}</b>
+                {faultConf ? <span className="text-rose-300/70"> · {Math.round(faultConf * 100)}% confidence</span> : null}
               </span>
-              <span className="text-sm font-mono text-slate-500">
-                {latest ? `${latest.latency_ms.toFixed(1)} ms` : "—"}
-              </span>
-            </div>
-          </div>
+            </Card>
+          )}
+          {drift && (
+            <Card className="!p-3 flex items-center gap-2.5 border-amber-500/30 bg-amber-500/5" title="The normal operating range is slowly shifting over time.">
+              <Radio className="w-4 h-4 text-amber-400" />
+              <span className="text-sm text-amber-200">Concept drift — operating range shifting</span>
+            </Card>
+          )}
         </div>
+      )}
+
+      {/* Hero stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard
+          icon={Thermometer}
+          label="Temperature"
+          value={temp != null ? temp.toFixed(1) : "--"}
+          unit="°C"
+          color={tColor}
+          sub={`safe ${th.safe_max}° · crit ${th.critical}°`}
+          spark={tempSpark}
+          title="Live temperature. Green = safe, amber = hot, red = over limit."
+        />
+        <StatCard
+          icon={HeartPulse}
+          label="Machine Health"
+          value={health != null ? Math.round(health) : "--"}
+          unit="/ 100"
+          color={hColor}
+          sub={`${healthLabel(health)} · trend ${meta.health_trend || "—"}`}
+          title="Composite digital-twin health: thermal, mechanical and longevity."
+        />
+        <StatCard
+          icon={Cpu}
+          label="AI Decision"
+          value={decision.text}
+          color={decision.color}
+          sub={`confidence ${(latest?.urgency ?? 0).toFixed(2)}`}
+          title={decision.tip}
+        />
+        <StatCard
+          icon={Timer}
+          label="Time to Limit"
+          value={rulText}
+          color={rulColor}
+          sub={latest ? `${latest.latency_ms.toFixed(1)} ms response` : "—"}
+          title="Estimated time before the machine reaches its safe limit."
+        />
       </div>
 
-      {/* Middle Row: Multi-model Graph + Temp/LSTM Graph */}
-      <div className="relative z-10 grid grid-cols-12 gap-5">
-        {/* Multi-Model Anomaly Score Graph */}
-        <div className="col-span-12 lg:col-span-7 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
-            Multi-Model Anomaly Scores (Live)
-          </h2>
-          <div className="h-[280px]">
+      {/* KPI strip */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+        <KpiTile icon={Clock} label="Session Uptime" value={fmtUptime(uptime)} tip="How long this monitoring session has been open." />
+        <KpiTile icon={TrendingUp} label="Peak Temp (2m)" value={kpis.peak} tip="Highest temperature in the last ~2 minutes." />
+        <KpiTile icon={Bell} label="Events (2m)" value={String(kpis.events)} tip="Anomaly episodes in the last ~2 minutes." />
+        <KpiTile icon={Zap} label="Actions (2m)" value={String(kpis.actions)} tip="Protective actions taken recently." />
+        <KpiTile icon={Timer} label="Avg Response" value={kpis.latency} tip="Average model response time (lower is better)." />
+      </div>
+
+      {/* Temperature chart + Where AI runs */}
+      <div className="grid grid-cols-12 gap-4">
+        <Card className="col-span-12 lg:col-span-8">
+          <CardTitle
+            icon={Thermometer}
+            right={
+              <div className="flex items-center gap-3 text-[11px] text-slate-500">
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 rounded" style={{ background: CHART.temp }} /> Now</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 rounded" style={{ background: CHART.forecast }} /> Forecast</span>
+                {fcTraj && <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 rounded" style={{ background: CHART.indigo }} /> Projection +{fcTraj.length}s</span>}
+              </div>
+            }
+          >
+            Temperature — Now, Forecast & Projection
+          </CardTitle>
+          <div className="h-[260px]">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+              <LineChart data={tempChartData} margin={{ top: 6, right: 12, left: -20, bottom: 0 }}>
                 <defs>
-                  <linearGradient id="gradIF" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradLSTM" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#14b8a6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#14b8a6" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradAE" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradVib" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                  <linearGradient id="tempFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={CHART.temp} stopOpacity={0.18} />
+                    <stop offset="100%" stopColor={CHART.temp} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={6} />
-                <YAxis stroke="#475569" fontSize={10} domain={[0, 1]} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#0f172a", borderColor: "#1e293b", borderRadius: "8px", fontSize: "12px" }}
-                  itemStyle={{ color: "#e2e8f0" }}
-                />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: "11px" }} />
-                <Area type="monotone" dataKey="if_score" name="Isolation Forest" stroke="#06b6d4" fill="url(#gradIF)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                <Area type="monotone" dataKey="lstm_score" name="LSTM Deviation" stroke="#14b8a6" fill="url(#gradLSTM)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                <Area type="monotone" dataKey="ae_score" name="Autoencoder" stroke="#f59e0b" fill="url(#gradAE)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                <Area type="monotone" dataKey="vib_score" name="Vibration" stroke="#a855f7" fill="url(#gradVib)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                <Line type="monotone" dataKey="context_score" name="Fused Score" stroke="#ffffff" strokeWidth={2} dot={false} isAnimationActive={false} strokeDasharray="4 4" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Fused Context + Urgency Gauges */}
-        <div className="col-span-12 lg:col-span-5 space-y-5">
-          {/* Context Score */}
-          <div className="bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-            <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
-              Fused Context Score
-            </h2>
-            <div className="flex items-center gap-6">
-              <div className="relative flex items-center justify-center w-24 h-24 rounded-full border-4 border-slate-800 bg-slate-900/80">
-                <div className="text-2xl font-black text-white">
-                  {(latest?.context_score ?? 0).toFixed(2)}
-                </div>
-                <div
-                  className={`absolute inset-0 rounded-full border-4 transition-all duration-500 ${
-                    latest && latest.context_score > 0.6
-                      ? "border-rose-500 animate-pulse"
-                      : "border-transparent"
-                  }`}
-                />
-              </div>
-              <div className="flex-1 space-y-3">
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-400">System Urgency</span>
-                    <span className="text-slate-200">{(latest?.urgency ?? 0).toFixed(3)}</span>
-                  </div>
-                  <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${(latest?.urgency ?? 0) * 100}%`,
-                        background:
-                          (latest?.urgency ?? 0) > 0.8
-                            ? "#ef4444"
-                            : (latest?.urgency ?? 0) > 0.5
-                            ? "#f59e0b"
-                            : "#6366f1",
-                      }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-400">Raw Anomaly (AE)</span>
-                    <span className="text-slate-200">{(latest?.anomaly_score ?? 0).toFixed(3)}</span>
-                  </div>
-                  <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-amber-500 rounded-full transition-all duration-500"
-                      style={{ width: `${(latest?.anomaly_score ?? 0) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* LLM Alert */}
-          <div className="bg-[#0b0f19] border border-slate-800/80 rounded-2xl p-5 shadow-xl flex flex-col h-[196px]">
-            <h2 className="text-xs font-semibold text-indigo-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Zap className="w-3.5 h-3.5" /> Phi-3 Context Engine
-              {latest?.llm_source && (
-                <span className="ml-auto text-[9px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/30">
-                  {latest.llm_source}
-                </span>
-              )}
-            </h2>
-            <div className="flex-1 bg-black/40 rounded-lg p-3 overflow-y-auto border border-slate-800/50 font-mono text-xs leading-relaxed text-slate-300">
-              {latest ? (
-                <div className={latest.urgency > 0.6 ? "text-rose-200" : "text-emerald-200"}>
-                  {latest.alert}
-                </div>
-              ) : (
-                <span className="text-slate-600 animate-pulse">
-                  Waiting for telemetry sequence...
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Bottom Row: Temp Chart + Injection Panel */}
-      <div className="relative z-10 grid grid-cols-12 gap-5">
-        {/* Temperature + LSTM Prediction */}
-        <div className="col-span-12 lg:col-span-8 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl p-5 shadow-xl">
-          <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
-            Temperature vs LSTM Prediction
-          </h2>
-          <div className="h-[250px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={6} />
-                <YAxis stroke="#475569" fontSize={10} domain={["auto", "auto"]} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: "#0f172a", borderColor: "#1e293b", borderRadius: "8px", fontSize: "12px" }}
-                  itemStyle={{ color: "#e2e8f0" }}
-                />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: "11px" }} />
-                <ReferenceLine
-                  y={thresholds.safe_max}
-                  stroke="#f59e0b"
-                  strokeDasharray="4 4"
-                  label={{ value: "Safe Max", fill: "#f59e0b", fontSize: 10, position: "right" }}
-                />
-                <ReferenceLine
-                  y={thresholds.critical}
-                  stroke="#ef4444"
-                  strokeDasharray="4 4"
-                  label={{ value: "Critical", fill: "#ef4444", fontSize: 10, position: "right" }}
-                />
-                <Line type="monotone" dataKey="current_temp" name="Actual Temp (°C)" stroke="#f43f5e" strokeWidth={2} dot={false} isAnimationActive={false} />
-                <Line type="monotone" dataKey="lstm_prediction" name="LSTM Predict (+10m)" stroke="#14b8a6" strokeWidth={2} strokeDasharray="5 5" dot={false} isAnimationActive={false} />
+                <CartesianGrid strokeDasharray="3 6" stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="time" stroke={CHART.axis} fontSize={CHART.tickFont} tickMargin={8} tickLine={false} axisLine={false} />
+                <YAxis stroke={CHART.axis} fontSize={CHART.tickFont} domain={["auto", "auto"]} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} />
+                <ReferenceLine y={th.safe_max} stroke={CHART.warn} strokeDasharray="4 4" strokeOpacity={0.6} label={{ value: "SAFE", fill: CHART.warn, fontSize: 9, position: "insideTopRight" }} />
+                <ReferenceLine y={th.critical} stroke={CHART.crit} strokeDasharray="4 4" strokeOpacity={0.6} label={{ value: "LIMIT", fill: CHART.crit, fontSize: 9, position: "insideTopRight" }} />
+                {/* P2.1: p10 / p90 uncertainty band as two faint dotted bounds (keeps axis tight) */}
+                <Line type="monotone" dataKey="bandHi" name="p90" stroke={CHART.indigo} strokeWidth={1} strokeOpacity={0.4} strokeDasharray="1 3" dot={false} isAnimationActive={false} connectNulls legendType="none" />
+                <Line type="monotone" dataKey="bandLo" name="p10" stroke={CHART.indigo} strokeWidth={1} strokeOpacity={0.4} strokeDasharray="1 3" dot={false} isAnimationActive={false} connectNulls legendType="none" />
+                <Area type="monotone" dataKey="current_temp" name="Now (°C)" stroke={CHART.temp} strokeWidth={2.2} fill="url(#tempFill)" dot={false} isAnimationActive={false} connectNulls={false} />
+                <Line type="monotone" dataKey="lstm_prediction" name="Forecast (°C)" stroke={CHART.forecast} strokeWidth={1.6} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="projection" name="Projection (°C)" stroke={CHART.indigo} strokeWidth={1.8} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
               </LineChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </Card>
 
-        {/* Anomaly Injection Panel */}
-        <div className="col-span-12 lg:col-span-4 bg-gradient-to-br from-indigo-950/40 to-slate-900/50 backdrop-blur-md border border-indigo-900/50 rounded-2xl p-5 shadow-xl">
-          <h2 className="text-xs font-semibold text-indigo-300 uppercase tracking-wider mb-2 flex items-center gap-2">
-            <ShieldAlert className="w-3.5 h-3.5" /> Instructor Mode
-          </h2>
-          <p className="text-[10px] text-slate-500 mb-4">
-            Inject anomalies to observe live AI response and routing logic.
-          </p>
+        {/* Live vitals (system_health components — real per-component values) */}
+        <Card className="col-span-12 lg:col-span-4">
+          <CardTitle icon={Gauge} right={<span className="metric text-xs" style={{ color: hColor }}>{health != null ? Math.round(health) : "--"}/100</span>}>
+            Live Vitals
+          </CardTitle>
           <div className="space-y-2.5">
-            {ANOMALY_BUTTONS.map((btn) => (
+            {(sh?.components || []).slice(0, 5).map((c) => (
+              <div key={c.name} className="flex items-center gap-2.5" title={c.verdict}>
+                <span className="text-base w-5 text-center">{c.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-300">{c.name}</span>
+                    <span className="metric text-xs text-slate-100">{c.val}</span>
+                  </div>
+                  <div className="text-[10px]" style={{ color: statusColor(c.status) }}>{c.verdict}</div>
+                </div>
+              </div>
+            ))}
+            {!sh && <Awaiting />}
+          </div>
+        </Card>
+      </div>
+
+      {/* Anomaly signals + Why this decision */}
+      <div className="grid grid-cols-12 gap-4">
+        <Card className="col-span-12 lg:col-span-7">
+          <CardTitle
+            icon={Activity}
+            right={
+              <div className="flex flex-wrap gap-2.5 text-[10px] text-slate-500">
+                <span style={{ color: CHART.cyan }}>● Odd</span>
+                <span style={{ color: CHART.good }}>● Trend</span>
+                <span style={{ color: CHART.amber }}>● Pattern</span>
+                <span style={{ color: CHART.fuchsia }}>● Vibration</span>
+                <span style={{ color: CHART.bad }}>● Detector</span>
+              </div>
+            }
+          >
+            Anomaly Signals (per model, 0–1)
+            {detectorP != null && (
+              <span className="ml-2 text-[11px]" style={{ color: detectorP > 0.5 ? CHART.bad : CHART.good }}>
+                · P(fault) {(detectorP * 100).toFixed(0)}%
+              </span>
+            )}
+          </CardTitle>
+          <div className="h-[230px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData} margin={{ top: 6, right: 12, left: -24, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="combFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={CHART.combined} stopOpacity={0.12} />
+                    <stop offset="100%" stopColor={CHART.combined} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 6" stroke={CHART.grid} vertical={false} />
+                <XAxis dataKey="time" stroke={CHART.axis} fontSize={CHART.tickFont} tickMargin={8} tickLine={false} axisLine={false} />
+                <YAxis stroke={CHART.axis} fontSize={CHART.tickFont} domain={[0, 1]} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} />
+                <Area type="monotone" dataKey="detector" name="Detector P(fault)" stroke={CHART.bad} strokeWidth={2.2} fill="url(#combFill)" dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="if_score" name="Odd reading" stroke={CHART.cyan} strokeWidth={1.3} dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="lstm_score" name="Heat trend" stroke={CHART.good} strokeWidth={1.3} dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="ae_score" name="Pattern" stroke={CHART.amber} strokeWidth={1.3} dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="vib_score" name="Vibration" stroke={CHART.fuchsia} strokeWidth={1.3} dot={false} isAnimationActive={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+
+        <Card className="col-span-12 lg:col-span-5">
+          <CardTitle icon={Sparkles}>Why This Decision?</CardTitle>
+          <div className="space-y-3">
+            {XAI_ROWS.map((r) => {
+              const v = contrib[r.key] ?? 0;
+              const active = v > 25;
+              return (
+                <div key={r.key} className="flex items-center gap-3" title={`${r.meaning} — ${r.model}`}>
+                  <div className="w-28 shrink-0">
+                    <div className="text-xs text-slate-300">{r.label}</div>
+                    <div className="text-[10px] text-slate-600">{r.meaning}</div>
+                  </div>
+                  <div className="flex-1"><Progress value={v} color={active ? "#22d3ee" : "#475569"} /></div>
+                  <span className="metric text-xs w-9 text-right" style={{ color: active ? "#22d3ee" : "#5d6b82" }}>{v}%</span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-slate-500 mt-4 pt-3 border-t border-white/[0.06]">
+            {topRow ? (
+              <><span className="text-cyan-400 font-medium">Main reason:</span> {topRow.label} — {topRow.meaning.toLowerCase()}</>
+            ) : (
+              <span className="text-slate-600">No single cause — system looks normal.</span>
+            )}
+          </p>
+        </Card>
+      </div>
+
+      {/* Maintenance + Inject panel */}
+      <div className="grid grid-cols-12 gap-4">
+        <Card className="col-span-12 lg:col-span-5">
+          <CardTitle icon={Wrench}>Maintenance Plan</CardTitle>
+          {maint ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="metric text-lg" style={{ color: maintColor }}>{maint.status?.toUpperCase()}</span>
+                <span className="pill" style={{ color: maintColor, borderColor: `${maintColor}55`, background: `${maintColor}14` }}>
+                  {maint.urgency_level?.toUpperCase()}
+                </span>
+              </div>
+              <p className="text-[13px] text-slate-400 leading-relaxed">{maint.action}</p>
+              {maint.window_start && (
+                <p className="text-[11px] text-slate-500">
+                  Window: {new Date(maint.window_start).toLocaleString()} → {maint.window_end ? new Date(maint.window_end).toLocaleString() : "—"}
+                </p>
+              )}
+            </div>
+          ) : (
+            <Awaiting />
+          )}
+        </Card>
+
+        <Card className="col-span-12 lg:col-span-7">
+          <CardTitle icon={ShieldAlert}>Test Panel · Inject a Fault</CardTitle>
+          <p className="text-[11px] text-slate-500 mb-3">
+            {can("inject") ? "Click to simulate a fault and watch the AI react." : "Read-only — sign in as operator to use."}
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {ANOMALY_BUTTONS.map((b) => (
               <button
-                key={btn.type}
-                onClick={() => injectAnomaly(btn.type)}
-                className={`w-full flex items-center gap-2.5 border rounded-lg py-2 px-3 text-sm font-medium transition-colors ${
-                  colorMap[btn.color]
-                }`}
+                key={b.type}
+                onClick={() => injectAnomaly(b.type)}
+                disabled={!can("inject")}
+                title={b.tip}
+                className="flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed hover:bg-white/[0.04] hover:-translate-y-0.5"
+                style={{ borderColor: `${b.color}40`, color: b.color }}
               >
-                <btn.icon className="w-4 h-4" />
-                {btn.label}
+                <b.icon className="w-3.5 h-3.5 shrink-0" /> {b.label}
               </button>
             ))}
             <button
               onClick={resetSystem}
-              className="w-full flex items-center gap-2.5 border border-slate-700 rounded-lg py-2 px-3 text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition-colors mt-3"
+              disabled={!can("inject")}
+              title="Clear all injected faults and return to idle."
+              className="flex items-center gap-2 rounded-xl border border-white/[0.1] text-slate-400 px-3 py-2.5 text-xs font-medium hover:bg-white/[0.04] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <RotateCcw className="w-4 h-4" />
-              Reset System
+              <RotateCcw className="w-3.5 h-3.5 shrink-0" /> Reset
             </button>
           </div>
-        </div>
+        </Card>
       </div>
 
-      {/* Fleet Registry (Federated Network) */}
-      <div className="relative z-10 bg-slate-900/40 backdrop-blur-md border border-slate-800/60 rounded-2xl p-5 shadow-xl mt-6">
-        <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-          <Network className="w-4 h-4 text-indigo-400" /> Federated Fleet Registry
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Object.entries(useTelemetry().registry).map(([nodeId, data]: [string, any]) => (
-            <div key={nodeId} className="bg-slate-950/50 border border-slate-800/50 rounded-xl p-3 flex items-center justify-between">
-              <div>
-                <div className="text-xs font-bold text-slate-200">{nodeId}</div>
-                <div className="text-[10px] text-slate-500 uppercase">{data.machine_type}</div>
+      {/* Event log */}
+      <Card>
+        <CardTitle icon={Bell}>Event Log</CardTitle>
+        <div className="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
+          {alarms.length === 0 && <p className="text-sm text-slate-600 py-2">No active alarms — all clear.</p>}
+          {alarms.map((a) => {
+            const ackd = acked.has(a.id);
+            const col = a.sev === "critical" ? "#f87171" : "#fbbf24";
+            return (
+              <div key={a.id} className="flex items-center gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2">
+                <span className="metric text-[11px] text-slate-500 w-16 shrink-0">{a.time}</span>
+                <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: ackd ? "#475569" : col }} />
+                <span className={`text-xs flex-1 truncate ${ackd ? "text-slate-600 line-through" : "text-slate-300"}`}>{a.msg}</span>
+                {!ackd && (
+                  <button
+                    onClick={() => setAcked((s) => new Set(s).add(a.id))}
+                    title="Acknowledge"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-white/[0.1] text-slate-400 hover:text-cyan-300 hover:border-cyan-500/40"
+                  >
+                    <Check className="w-3 h-3" /> Ack
+                  </button>
+                )}
               </div>
-              <div className="text-right">
-                <div className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                  data.status === "active" || data.status === "do-nothing"
-                    ? "text-emerald-400 border-emerald-500/20 bg-emerald-500/10"
-                    : "text-rose-400 border-rose-500/20 bg-rose-500/10"
-                }`}>
-                  {data.status}
-                </div>
-                <div className="text-[9px] text-slate-600 mt-1">{data.last_updated}</div>
-              </div>
-            </div>
-          ))}
-          {Object.keys(useTelemetry().registry).length === 0 && (
-            <div className="col-span-full py-8 text-center text-slate-600 text-sm italic">
-              No other active nodes detected in the local network.
-            </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* AI assistant alert */}
+      <Card accent>
+        <CardTitle icon={Activity} right={latest?.llm_source ? <Badge tone="indigo">{latest.llm_source}</Badge> : undefined}>
+          AI Assistant — Plain-Language Alert
+        </CardTitle>
+        <div className="rounded-xl bg-black/30 border border-white/[0.06] p-4 font-mono text-[13px] leading-relaxed min-h-[60px]">
+          {latest ? (
+            <span className={latest.urgency > 0.6 ? "text-rose-300" : "text-emerald-300"}>
+              <span className="text-slate-600">$ </span>{latest.alert}
+            </span>
+          ) : (
+            <span className="text-slate-600">awaiting telemetry sequence…</span>
           )}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

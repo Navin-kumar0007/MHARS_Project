@@ -62,3 +62,12 @@ tensorboard_logs/
 # ── llama.cpp build artifacts ─────────────────────────────────
 *.so
 *.dylib
+# MHARS runtime-generated
+mhars/share_links.json
+mhars/share_tokens.json
+
+# Pre-P1 model backups (local only)
+models/backup_pre_p1/
+
+# TorchScript edge artifacts (local build output)
+models/edge/

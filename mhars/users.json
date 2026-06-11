@@ -1,0 +1,17 @@
+{
+    "admin": {
+        "password_hash": "$2b$12$j/uVYyH0VwMcnPVuwPF01efzG0YsQwoUptS2P9.INXjcBG6OEIeEC",
+        "role": "admin",
+        "created_at": 1780646285.369316
+    },
+    "operator": {
+        "password_hash": "$2b$12$br8JFMsaR0RZq1V3UY0/CeS3mRf5s21qPBdTTFlaS7XgPQX7waWIS",
+        "role": "operator",
+        "created_at": 1780646285.5391512
+    },
+    "viewer": {
+        "password_hash": "$2b$12$d8N5RCQMXn6.03UD2MwIM.lSAJwF3Xok5sgfgBrPemDyrgTtXM7n6",
+        "role": "viewer",
+        "created_at": 1780646285.709276
+    }
+}

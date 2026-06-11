@@ -22,6 +22,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
+
+def _next_step(out):
+    """Collapse a multi-horizon (B, H) forecast to its next-step (B,) head so
+    adaptation/eval against scalar targets stays shape-correct (P1.5)."""
+    return out[..., 0] if out.dim() > 1 else out
+
 from load_cmapss import load_cmapss, preprocess, make_lstm_windows
 from lstm_predictor import ThermalLSTM
 from gym_env import MACHINE_PROFILES
@@ -136,13 +142,13 @@ class MachineAdapterV1:
         for epoch in range(epochs):
             for xb, yb in dl:
                 optimizer.zero_grad()
-                criterion(self.model(xb), yb).backward()
+                criterion(_next_step(self.model(xb)), yb).backward()
                 optimizer.step()
 
         self.model.eval()
         with torch.no_grad():
             val_rmse = float(
-                criterion(self.model(to_t(X_val)),
+                criterion(_next_step(self.model(to_t(X_val))),
                           torch.FloatTensor(y_val)).item() ** 0.5
             )
         return val_rmse
@@ -182,9 +188,10 @@ class ProgressiveMachineAdapter:
             from mhars.models import ThermalLSTMv2
             hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
             input_size = checkpoint["lstm.weight_ih_l0"].shape[1]
-            self.model = ThermalLSTMv2(input_size=input_size, hidden_size=hidden_size)
+            out_h = checkpoint["linear.weight"].shape[0]   # P1.5: multi-horizon
+            self.model = ThermalLSTMv2(input_size=input_size, hidden_size=hidden_size, output_horizon=out_h)
             self.is_v2 = True
-            print(f"  [Adapter] Detected V2 model (BiLSTM+Attention, input={input_size})")
+            print(f"  [Adapter] Detected V2 model (BiLSTM+Attention, input={input_size}, horizon={out_h})")
         else:
             # V1: Standard LSTM
             hidden_size = checkpoint["lstm.weight_ih_l0"].shape[0] // 4
@@ -219,7 +226,7 @@ class ProgressiveMachineAdapter:
             n = 0
             for xb, yb in dl:
                 optimizer.zero_grad()
-                preds = self.model(xb)
+                preds = _next_step(self.model(xb))
                 loss = criterion(preds, yb)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -236,7 +243,7 @@ class ProgressiveMachineAdapter:
         else:
             x = torch.FloatTensor(X_val).unsqueeze(-1)
         with torch.no_grad():
-            preds = self.model(x).numpy()
+            preds = _next_step(self.model(x)).numpy()
         rmse = float(np.sqrt(np.mean((preds - y_val) ** 2)))
         return rmse
 
@@ -355,7 +362,7 @@ class MetaLearningAdapter(ProgressiveMachineAdapter):
                 
                 for _ in range(inner_steps):
                     inner_opt.zero_grad()
-                    loss = criterion(self.model(xs), ys)
+                    loss = criterion(_next_step(self.model(xs)), ys)
                     loss.backward()
                     inner_opt.step()
                 
@@ -366,7 +373,7 @@ class MetaLearningAdapter(ProgressiveMachineAdapter):
                     xq = torch.FloatTensor(X_q).unsqueeze(-1)
                 yq = torch.FloatTensor(y_q)
                 
-                query_loss = criterion(self.model(xq), yq)
+                query_loss = criterion(_next_step(self.model(xq)), yq)
                 query_loss.backward()
                 meta_loss += query_loss.item()
                 

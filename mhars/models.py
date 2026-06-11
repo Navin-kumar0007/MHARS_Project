@@ -82,9 +82,11 @@ if TORCH_AVAILABLE:
           Input (batch, seq_len, 5) → BiLSTM(128, 2-layer)
             → Attention over timesteps → Dropout → Linear → prediction
         """
-        def __init__(self, input_size=5, hidden_size=128, num_layers=2, dropout=0.2):
+        def __init__(self, input_size=5, hidden_size=128, num_layers=2, dropout=0.2,
+                     output_horizon=1):
             super().__init__()
             self.hidden_size = hidden_size
+            self.output_horizon = output_horizon   # P1.5: direct multi-horizon forecast
             self.lstm = nn.LSTM(
                 input_size, hidden_size,
                 num_layers=num_layers,
@@ -95,27 +97,28 @@ if TORCH_AVAILABLE:
             # Temporal attention: learn which timesteps matter most
             self.attention_weight = nn.Linear(hidden_size * 2, 1)
             self.drop = nn.Dropout(dropout)
-            self.linear = nn.Linear(hidden_size * 2, 1)
+            # Head emits `output_horizon` steps ahead (t+1 … t+H).
+            self.linear = nn.Linear(hidden_size * 2, output_horizon)
 
-        def forward(self, x):
-            # x: (batch, seq_len, input_size)
-            out, _ = self.lstm(x)  # (batch, seq_len, hidden*2)
-            # Temporal attention: softmax over timesteps
+        def _context(self, x):
+            out, _ = self.lstm(x)                              # (batch, seq_len, hidden*2)
             attn_scores = self.attention_weight(out)           # (batch, seq_len, 1)
             attn_weights = torch.softmax(attn_scores, dim=1)   # (batch, seq_len, 1)
             context = (out * attn_weights).sum(dim=1)          # (batch, hidden*2)
-            context = self.drop(context)
-            return self.linear(context).squeeze(-1)            # (batch,)
+            return self.drop(context), attn_weights
+
+        def forward(self, x):
+            context, _ = self._context(x)
+            out = self.linear(context)                         # (batch, H)
+            # Backward-compatible: H==1 returns (batch,), else (batch, H).
+            return out.squeeze(-1) if self.output_horizon == 1 else out
 
         def forward_with_attention(self, x):
             """Return prediction AND attention weights for XAI visualization."""
-            out, _ = self.lstm(x)
-            attn_scores = self.attention_weight(out)
-            attn_weights = torch.softmax(attn_scores, dim=1)
-            context = (out * attn_weights).sum(dim=1)
-            context = self.drop(context)
-            pred = self.linear(context).squeeze(-1)
-            return pred, attn_weights.squeeze(-1)  # (batch,), (batch, seq_len)
+            context, attn_weights = self._context(x)
+            out = self.linear(context)
+            pred = out.squeeze(-1) if self.output_horizon == 1 else out
+            return pred, attn_weights.squeeze(-1)  # (batch,)/(batch,H), (batch, seq_len)
 
     class ThermalAutoencoderLSTM(nn.Module):
         """
@@ -189,6 +192,35 @@ if TORCH_AVAILABLE:
             last = out[:, -1, :]
             return self.head(last).squeeze(-1)
 
+    class FaultClassifier(nn.Module):
+        """
+        P2.4 — Supervised fault-type classifier.
+
+        Replaces the rule-based ``_fingerprint_anomaly`` heuristic with a learned
+        model that maps a per-tick feature vector (temperature dynamics + the
+        per-model anomaly scores + urgency) to a concrete fault class. Trained on
+        the serving distribution with each anomaly type injected on a schedule, so
+        it predicts the actual failure mode (heat spike, bearing wear, fan
+        blockage, sensor drift, power surge) with a calibrated confidence.
+        """
+        def __init__(self, n_features=10, n_classes=6, hidden=32, dropout=0.2):
+            super().__init__()
+            self.net = nn.Sequential(
+                nn.Linear(n_features, hidden), nn.ReLU(), nn.Dropout(dropout),
+                nn.Linear(hidden, hidden // 2), nn.ReLU(),
+                nn.Linear(hidden // 2, n_classes),
+            )
+
+        def forward(self, x):
+            return self.net(x)               # logits (batch, n_classes)
+
+        def predict(self, x):
+            """Return (class_idx, confidence) for a single normalized feature row."""
+            with torch.no_grad():
+                probs = torch.softmax(self.forward(x), dim=-1)
+                conf, idx = torch.max(probs, dim=-1)
+            return int(idx.item()), float(conf.item())
+
     try:
         from stage2_ml.tft_predictor import TFTPredictor
     except ImportError:
@@ -221,6 +253,10 @@ else:
             raise ImportError("PyTorch required: pip install torch")
 
     class RULPredictor:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch required: pip install torch")
+
+    class FaultClassifier:
         def __init__(self, *args, **kwargs):
             raise ImportError("PyTorch required: pip install torch")
 
