@@ -8,15 +8,15 @@ __pycache__/
 *$py.class
 *.pyc
 
-# ── Model weight files (DO NOT commit — see models/README.md) ─
-# These are binary files that can be hundreds of MB.
-# Regenerate them by running the stage scripts.
-models/*.pt
-models/*.pkl
-models/*.zip
+# ── Model weight files ───────────────────────────────────────
+# Large weights stay out of git; the small trained models (~6 MB total) are
+# committed so a fresh clone / CI runs the real models instead of fallbacks.
+# Phi-3 LLM (~2.2 GB) — download separately; app falls back to template alerts.
+# NOTE: gitignore has no inline comments — keep patterns on their own lines.
 models/*.gguf
 models/*.bin
 models/*.safetensors
+# (models/*.pt, *.pkl, *.zip ARE committed — small, deterministic, validated)
 
 # ── Data files (download separately — see README.md) ─────────
 data/*.txt
