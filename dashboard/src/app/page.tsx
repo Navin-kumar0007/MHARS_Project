@@ -128,7 +128,8 @@ function KpiTile({ icon: Icon, label, value, tip }: { icon: React.ElementType; l
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function DashboardPage() {
-  const { latest, history, injectAnomaly, resetSystem, downloadReport, can, liveMode, isConnected } = useTelemetry();
+  const { latest, history, injectAnomaly, resetSystem, downloadReport, can, liveMode, isConnected, systemStatus } = useTelemetry();
+  const degraded = systemStatus?.models_degraded ?? [];
   const [clock, setClock] = useState("--:--:--");
   const [uptime, setUptime] = useState(0);
   const [acked, setAcked] = useState<Set<number>>(new Set());
@@ -276,6 +277,14 @@ export default function DashboardPage() {
           {liveMode ? "LIVE · Real HW" : "DEMO · Sim"}
         </Badge>
         <Badge tone={isConnected ? "good" : "bad"}>{isConnected ? "Link OK" : "No Link"}</Badge>
+        {systemStatus?.model_status && (
+          <Badge
+            tone={degraded.length === 0 ? "good" : "warn"}
+            title={degraded.length === 0 ? "All models running their trained path." : `Fallback: ${degraded.join(", ")}`}
+          >
+            {degraded.length === 0 ? "Models ✓" : `${degraded.length} fallback`}
+          </Badge>
+        )}
         <span className="metric text-xs text-slate-500 px-2">{clock}</span>
         {can("download_report") && (
           <button

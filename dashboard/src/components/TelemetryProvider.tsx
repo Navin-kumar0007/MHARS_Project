@@ -50,6 +50,8 @@ export type SystemStatus = {
     heat_rate: number;
   };
   models_loaded: Record<string, boolean>;
+  model_status?: Record<string, { ok: boolean; detail: string }>;
+  models_degraded?: string[];
   available_machines: Record<string, string>;
   available_anomalies: Record<string, string>;
   active_anomaly: string | null;

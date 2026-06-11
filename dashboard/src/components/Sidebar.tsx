@@ -18,6 +18,7 @@ import {
   Radio,
   Cpu,
   BookOpen,
+  Activity,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { href: "/analytics", label: "Analytics", icon: BarChart3, perm: "view" },
   { href: "/pipeline", label: "AI Pipeline", icon: GitBranch, perm: "view" },
   { href: "/history", label: "History", icon: ScrollText, perm: "view" },
+  { href: "/diagnostics", label: "Diagnostics", icon: Activity, perm: "view" },
   { href: "/learn", label: "How It Works", icon: BookOpen, perm: "view" },
   { href: "/settings", label: "Settings", icon: Settings, perm: "view" },
 ];
