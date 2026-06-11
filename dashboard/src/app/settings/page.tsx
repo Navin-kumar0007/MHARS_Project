@@ -78,15 +78,29 @@ export default function SettingsPage() {
 
         <Card className="col-span-12 lg:col-span-6">
           <CardTitle icon={Boxes}>Model Status</CardTitle>
-          <div className="grid grid-cols-2 gap-2">
-            {Object.entries(models).map(([name, ok]) => (
-              <div key={name} className="flex items-center justify-between bg-white/[0.02] border border-white/[0.06] rounded-lg px-3 py-2">
-                <span className="text-xs text-slate-300 truncate">{name}</span>
-                <Badge tone={ok ? "good" : "neutral"}>{ok ? "loaded" : "fallback"}</Badge>
-              </div>
-            ))}
-            {Object.keys(models).length === 0 && <p className="text-slate-600 text-sm col-span-2">Loading…</p>}
-          </div>
+          {systemStatus?.model_status ? (
+            <div className="grid grid-cols-1 gap-2">
+              {Object.entries(systemStatus.model_status).map(([name, v]) => (
+                <div key={name} className="flex items-center justify-between bg-white/[0.02] border border-white/[0.06] rounded-lg px-3 py-2">
+                  <span className="text-xs text-slate-300 truncate">{name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-500">{v.detail}</span>
+                    <Badge tone={v.ok ? "good" : "warn"}>{v.ok ? "live" : "fallback"}</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(models).map(([name, ok]) => (
+                <div key={name} className="flex items-center justify-between bg-white/[0.02] border border-white/[0.06] rounded-lg px-3 py-2">
+                  <span className="text-xs text-slate-300 truncate">{name}</span>
+                  <Badge tone={ok ? "good" : "neutral"}>{ok ? "loaded" : "fallback"}</Badge>
+                </div>
+              ))}
+              {Object.keys(models).length === 0 && <p className="text-slate-600 text-sm col-span-2">Loading…</p>}
+            </div>
+          )}
         </Card>
 
         {can("share") && (

@@ -17,6 +17,7 @@ Endpoints:
 
 import sys
 import os
+import json
 import time
 import asyncio
 import numpy as np
@@ -360,6 +361,38 @@ async def get_status():
 async def get_system_status():
     """Returns the current machine profile, model status, and available anomalies."""
     profile = MACHINE_PROFILES[state.machine_type_id]
+    m = state.mhars
+    llm_live = m._llm_gen is not None and getattr(m._llm_gen, 'use_llm', False)
+
+    # P4.1: per-model provenance. ok=True when the trained model is the live path;
+    # ok=False means a (functional) fallback is in use — surfaced as a badge so
+    # placeholder/degraded outputs are never mistaken for the real model.
+    def entry(ok, detail):
+        return {"ok": bool(ok), "detail": detail}
+
+    model_status = {
+        "Forecast (LSTM)":   entry(m._lstm is not None,
+                                   ("quantile multi-horizon" if getattr(m, "_lstm_qmode", False)
+                                    else (m._lstm_version or "fallback"))),
+        "Anomaly AE":        entry(m._ae_model is not None,
+                                   "calibrated (EVT)" if getattr(m, "_ae_calib", None) else
+                                   ("loaded" if m._ae_model is not None else "fallback")),
+        "Vibration":         entry(m._vib_model is not None,
+                                   "calibrated (EVT)" if getattr(m, "_vib_calib", None) else
+                                   ("loaded" if m._vib_model is not None else "fallback")),
+        "Isolation Forest":  entry(getattr(m, "_if_has_retrained", False),
+                                   "serving-distribution" if getattr(m, "_if_has_retrained", False) else "warmup proxy"),
+        "Fusion":            entry(getattr(m, "_learned_fusion", None) is not None,
+                                   "learned attention" if getattr(m, "_learned_fusion", None) else "rule-based"),
+        "RUL Predictor":     entry(getattr(m, "_rul_model", None) is not None,
+                                   "learned" if getattr(m, "_rul_model", None) else "physics fallback"),
+        "Fault Classifier":  entry(getattr(m, "_fault_clf", None) is not None,
+                                   "supervised" if getattr(m, "_fault_clf", None) else "rule-based fingerprint"),
+        "PPO Agent":         entry(m._ppo is not None, "loaded" if m._ppo is not None else "rule-based"),
+        "LLM (Phi-3)":       entry(llm_live, "on-device" if llm_live else "template alerts"),
+    }
+    degraded = sorted([k for k, v in model_status.items() if not v["ok"]])
+
     return {
         "machine_type_id": state.machine_type_id,
         "machine_profile": profile,
@@ -369,8 +402,10 @@ async def get_system_status():
             "autoencoder": state.mhars._ae_model is not None,
             "vibration_detector": state.mhars._vib_model is not None,
             "ppo_agent": state.mhars._ppo is not None,
-            "phi3_llm": state.mhars._llm_gen is not None and getattr(state.mhars._llm_gen, 'use_llm', False),
+            "phi3_llm": llm_live,
         },
+        "model_status": model_status,
+        "models_degraded": degraded,
         "available_machines": {
             mid: mp["name"] for mid, mp in MACHINE_PROFILES.items()
         },
@@ -380,6 +415,51 @@ async def get_system_status():
         "active_anomaly": state.anomaly_injection,
         "synthetic_mode": MHARS_SYNTHETIC_MODE,
     }
+
+
+@app.get("/api/model_registry")
+async def get_model_registry():
+    """X.1: model registry — identity (sha + size + mtime) of each live artifact.
+    Lets you confirm exactly which trained weights are deployed."""
+    import hashlib
+    mdir = os.path.join(os.path.dirname(__file__), "..", "models")
+    artifacts = {
+        "Forecast (LSTM)": "lstm_v2.pt",
+        "Anomaly AE": "autoencoder_lstm_v2.pt",
+        "Vibration": "vibration_detector.pt",
+        "Isolation Forest": "isolation_forest.pkl",
+        "Fusion": "learned_fusion.pt",
+        "RUL Predictor": "rul_predictor_v2.pt",
+        "Fault Classifier": "fault_classifier.pt",
+        "PPO Agent": "ppo_thermal.zip",
+    }
+    out = []
+    for name, fn in artifacts.items():
+        path = os.path.join(mdir, fn)
+        if os.path.exists(path):
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    h.update(chunk)
+            st = os.stat(path)
+            out.append({"name": name, "file": fn, "present": True,
+                        "sha": h.hexdigest()[:12], "size_kb": round(st.st_size / 1024, 1),
+                        "modified": st.st_mtime})
+        else:
+            out.append({"name": name, "file": fn, "present": False,
+                        "sha": None, "size_kb": 0, "modified": None})
+    return {"registry": out}
+
+
+@app.get("/api/eval_report")
+async def get_eval_report():
+    """P4.3: return the offline anomaly-detection evaluation report (if present).
+    Generated by tools/eval_anomaly.py — F1/ROC-AUC per detector + per-fault rates."""
+    path = os.path.join(os.path.dirname(__file__), "..", "models", "eval_report.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            return {"available": True, "report": json.load(f)}
+    return {"available": False, "report": None}
 
 
 @app.post("/api/inject_anomaly", dependencies=[Depends(require_role(["operator", "admin"]))])

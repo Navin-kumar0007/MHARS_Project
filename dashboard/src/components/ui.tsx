@@ -137,12 +137,14 @@ export function Badge({
   tone = "neutral",
   children,
   className = "",
+  title,
 }: {
   tone?: keyof typeof TONES | string;
   children: React.ReactNode;
   className?: string;
+  title?: string;
 }) {
-  return <span className={cx("pill", TONES[tone] || TONES.neutral, className)}>{children}</span>;
+  return <span title={title} className={cx("pill", TONES[tone] || TONES.neutral, className)}>{children}</span>;
 }
 
 // ── Stat card ────────────────────────────────────────────────────────────────

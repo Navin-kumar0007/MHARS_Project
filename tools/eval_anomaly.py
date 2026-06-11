@@ -102,17 +102,29 @@ def main():
     pf = np.array([r[6] for r in rows])
     print(f"\nSamples={len(y)}  positives(fault)={int(y.sum())} ({y.mean()*100:.1f}%)\n")
 
+    import json, time
+    report = {"generated_at": time.time(), "samples": int(len(y)),
+              "positives": int(y.sum()), "detectors": {}, "per_fault": {}}
     for name, s in [("context (fused)", ctx), ("ae_score", ae), ("vib_score", vib), ("urgency", urg), ("clf P(fault)", pf)]:
         p, r, f = prf(y, s, 0.5)
         bp, br, bf, bt = best_f1(y, s)
-        print(f"  {name:<16} @0.5: P={p:.2f} R={r:.2f} F1={f:.2f} | best F1={bf:.2f}@{bt:.2f} | ROC-AUC={auc_roc(y,s):.3f}")
+        roc = auc_roc(y, s)
+        print(f"  {name:<16} @0.5: P={p:.2f} R={r:.2f} F1={f:.2f} | best F1={bf:.2f}@{bt:.2f} | ROC-AUC={roc:.3f}")
+        report["detectors"][name] = {"p": round(p, 3), "r": round(r, 3), "f1": round(f, 3),
+                                     "best_f1": round(bf, 3), "best_thr": round(bt, 3), "roc_auc": round(roc, 3)}
 
-    print("\n  Per-fault detection rate (context>=0.5):")
+    print("\n  Per-fault detection rate (clf P(fault)>=0.5):")
     for ftype in ANOMALY:
         idx = [i for i, rr in enumerate(rows) if rr[5] == ftype]
         if idx:
-            det = (ctx[idx] >= 0.5).mean()
+            det = float((pf[idx] >= 0.5).mean())
             print(f"    {ftype:<18} n={len(idx):4d}  detected={det:.2f}")
+            report["per_fault"][ftype] = {"n": len(idx), "detected": round(det, 3)}
+
+    out = os.path.join(ROOT, "models", "eval_report.json")
+    with open(out, "w") as f:
+        json.dump(report, f, indent=2)
+    print(f"\n✓ Report written → {out}")
 
 
 if __name__ == "__main__":

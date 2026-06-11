@@ -1,0 +1,69 @@
+{
+  "generated_at": 1781186577.0545201,
+  "samples": 12000,
+  "positives": 3124,
+  "detectors": {
+    "context (fused)": {
+      "p": 0.0,
+      "r": 0.0,
+      "f1": 0.0,
+      "best_f1": 0.412,
+      "best_thr": 0.31,
+      "roc_auc": 0.608
+    },
+    "ae_score": {
+      "p": 0.261,
+      "r": 0.499,
+      "f1": 0.343,
+      "best_f1": 0.391,
+      "best_thr": 0.4,
+      "roc_auc": 0.514
+    },
+    "vib_score": {
+      "p": 0.267,
+      "r": 0.499,
+      "f1": 0.348,
+      "best_f1": 0.41,
+      "best_thr": 0.768,
+      "roc_auc": 0.598
+    },
+    "urgency": {
+      "p": 0.264,
+      "r": 0.974,
+      "f1": 0.415,
+      "best_f1": 0.386,
+      "best_thr": 0.694,
+      "roc_auc": 0.573
+    },
+    "clf P(fault)": {
+      "p": 0.468,
+      "r": 0.963,
+      "f1": 0.63,
+      "best_f1": 0.754,
+      "best_thr": 0.947,
+      "roc_auc": 0.928
+    }
+  },
+  "per_fault": {
+    "temperature_spike": {
+      "n": 84,
+      "detected": 1.0
+    },
+    "bearing_wear": {
+      "n": 1120,
+      "detected": 0.941
+    },
+    "fan_blockage": {
+      "n": 660,
+      "detected": 0.98
+    },
+    "sensor_drift": {
+      "n": 1152,
+      "detected": 0.967
+    },
+    "power_surge": {
+      "n": 108,
+      "detected": 1.0
+    }
+  }
+}

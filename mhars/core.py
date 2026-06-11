@@ -139,6 +139,10 @@ class MHARS:
         # New Feature — Data Drift Detection
         self._ae_score_history: deque = deque(maxlen=100)
 
+        # X.1 — Streaming feature-drift monitor (concept-drift → retrain signal)
+        from mhars.drift_monitor import DriftMonitor
+        self._drift_monitor = DriftMonitor()
+
         # Issue 5 — Structured logging
         self._setup_logger()
 
@@ -633,6 +637,8 @@ class MHARS:
         # fingerprint when no model is loaded or its confidence is low.
         fault_features = self._fault_feature_vector(if_score, lstm_score, ae_score, vib_score, context, urgency)
         clf_fault, fault_confidence, anomaly_probability = self._classify_fault(fault_features)
+        # X.1 — monitor distribution drift on normal-operation samples only.
+        self._drift_monitor.update(fault_features, is_normal=(anomaly_probability < 0.5))
         if clf_fault is not None and clf_fault != "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE and urgency >= 0.5:
             fault_type = clf_fault
         elif clf_fault == "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE:
@@ -705,6 +711,8 @@ class MHARS:
                 # for the raw AE/fused scores). Display signal; control logic
                 # (urgency/PPO) is intentionally left unchanged.
                 "anomaly_probability": round(anomaly_probability, 4),
+                # X.1 — feature-drift / retrain signal
+                "drift": self._drift_monitor.snapshot(),
                 "health_score": health_data["score"],
                 "health_trend": health_data["trend"],
                 "health_breakdown": health_data["breakdown"],

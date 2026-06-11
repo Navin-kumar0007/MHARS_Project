@@ -1,5 +1,17 @@
 # MHARS — Enhancement Implementation Plan
 
+> **STATUS: COMPLETE ✅** (all phases implemented, 123/123 tests passing)
+> - **P1** correctness — train/serve alignment, RUL + learned fusion, CNN/Audio gated, EVT calibration, multi-horizon forecast
+> - **P2** accuracy — supervised fault classifier (0.86 acc), quantile forecaster + bands, MC-Dropout retired, learned anomaly detector (ROC-AUC 0.93 vs 0.55)
+> - **P3** latency/edge — Isolation-Forest hotspot fixed (5.3→4.3 ms/tick), TorchScript edge export
+> - **P4** observability — model-provenance badges + Diagnostics/metrics page
+> - **X.1** MLOps — streaming concept-drift monitor + model registry
+>
+> Security: hardcoded JWT dev secret removed + scrubbed from git history.
+> Open before merge to main: push branch · model provisioning (weights gitignored).
+
+
+
 > Deep analysis of the ML / AI / hardware / UI layers and a prioritized,
 > actionable plan to improve **accuracy, latency, and output fidelity**.
 > Generated from a full code walk of the repository.
