@@ -548,8 +548,12 @@ class MHARS:
                     float(np.std(window_data[-5:])),
                 ]])
                 self._if_retrain_buffer.append(feat[0])
-            if (self._if_sample_count % self._if_retrain_interval == 0
-                    and len(self._if_retrain_buffer) >= 50):
+            # Fire the first online retrain early (~100 samples) so the cheap
+            # warmup proxy hands off to the real serving-distribution IF quickly,
+            # then on the regular interval thereafter (P3.1).
+            if len(self._if_retrain_buffer) >= 50 and (
+                    self._if_sample_count % self._if_retrain_interval == 0
+                    or (not self._if_has_retrained and len(self._if_retrain_buffer) >= 100)):
                 self._retrain_if()
 
         # Step 3 — LSTM prediction (now returns conformal interval + boost)
@@ -843,10 +847,12 @@ class MHARS:
         # for erratic thermal profiles (CPU, Server).
         damping = Config.ANOMALY_DAMPING_FACTORS.get(self.machine_type_id, 1.0)
             
-        # Cold-start bypass: skip the pickle-loaded IF until online retrain has fired.
-        # The pickle was trained on CMAPSS multi-sensor data, not our 5-feature vector.
-        if self._if_model is None or (not self._if_has_retrained
-                                       and self._if_sample_count < Config.IF_COLD_START_SAMPLES):
+        # Cold-start bypass: skip the pickle-loaded IF entirely until the online
+        # retrain has fired. The pickle was trained on CMAPSS multi-sensor data,
+        # not our 5-feature serving vector — using it is both a train/serve
+        # mismatch and the per-tick latency hotspot (P3.1). A cheap linear proxy
+        # covers the warmup window until the serving-distribution IF is ready.
+        if self._if_model is None or not self._if_has_retrained:
             return float(np.clip((temp_norm - 0.3) / 0.7, 0, 1))
         # Build a meaningful 5-sensor feature vector from temperature history
         # instead of feeding [t, t, t, t, t] which makes the IF useless
@@ -874,7 +880,7 @@ class MHARS:
             X = np.array(list(self._if_retrain_buffer))
             new_model = IsolationForest(
                 contamination=Config.IF_CONTAMINATION,
-                n_estimators=100,
+                n_estimators=getattr(Config, "IF_N_ESTIMATORS", 100),
                 random_state=Config.SEED,
             )
             new_model.fit(X)

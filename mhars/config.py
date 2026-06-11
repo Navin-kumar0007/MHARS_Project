@@ -126,6 +126,9 @@ class Config:
     IF_ONLINE_RETRAIN       = True   # Toggle online Isolation Forest retraining
     IF_RETRAIN_INTERVAL     = 500    # Retrain every N samples (was 100, too frequent)
     IF_COLD_START_SAMPLES   = 50     # Skip IF pickle until online retrain fires once
+    # P3.1: IF.decision_function dominated per-tick latency (~73%). 50 trees on a
+    # 5-feature stream matches 100 within noise and roughly halves traversal cost.
+    IF_N_ESTIMATORS         = 50
 
     # ── Phase 2: Anomaly detection damping (replaces blanket CPU/Server bypass) ──
     # Factor ∈ (0, 1] applied to IF/AE/Vib scores per machine type.
