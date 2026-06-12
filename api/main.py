@@ -372,8 +372,9 @@ async def get_system_status():
         return {"ok": bool(ok), "detail": detail}
 
     model_status = {
-        "Forecast (LSTM)":   entry(m._lstm is not None,
-                                   ("quantile multi-horizon" if getattr(m, "_lstm_qmode", False)
+        "Forecast":          entry(getattr(m, "_foundation", None) is not None or m._lstm is not None,
+                                   ("foundation (zero-shot)" if getattr(m, "_foundation", None) is not None
+                                    else "quantile multi-horizon" if getattr(m, "_lstm_qmode", False)
                                     else (m._lstm_version or "fallback"))),
         "Anomaly AE":        entry(m._ae_model is not None,
                                    "calibrated (EVT)" if getattr(m, "_ae_calib", None) else

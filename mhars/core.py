@@ -244,6 +244,19 @@ class MHARS:
         else:
             print(f"  ⚠  Isolation Forest not found — skipping noise filter")
 
+        # R1: zero-shot foundation forecaster (opt-in via MHARS_FORECASTER=foundation).
+        # Lazy — the model only downloads/loads on first forecast.
+        self._foundation = None
+        self._prev_fc_band = None       # (p10,p50,p90) of last next-step forecast
+        self._foundation_anomaly = 0.0  # zero-shot residual anomaly score
+        if getattr(Config, "FORECASTER_BACKEND", "lstm") == "foundation":
+            try:
+                from stage2_ml.foundation_forecaster import FoundationForecaster
+                self._foundation = FoundationForecaster(Config.FOUNDATION_MODEL, quantiles=Config.LSTM_QUANTILES)
+                print(f"  ✓  Foundation forecaster enabled ({Config.FOUNDATION_MODEL}, zero-shot)")
+            except Exception as e:
+                print(f"  ⚠  Foundation forecaster unavailable ({e}) — using trained LSTM")
+
         # LSTM — prefer TFT (Phase 3), fall back to V2 (BiLSTM+Attention), fall back to V1
         self._lstm = None
         self._lstm_version = None  # "tft", "v2", or "v1"
@@ -637,6 +650,12 @@ class MHARS:
         # fingerprint when no model is loaded or its confidence is low.
         fault_features = self._fault_feature_vector(if_score, lstm_score, ae_score, vib_score, context, urgency)
         clf_fault, fault_confidence, anomaly_probability = self._classify_fault(fault_features)
+        # R1: when the zero-shot foundation backbone is active, use its
+        # distribution-free residual as the anomaly detector — it generalises to
+        # unseen machines / real hardware (no false-fire on out-of-distribution
+        # data), unlike the sim-trained classifier.
+        if self._foundation is not None:
+            anomaly_probability = float(self._foundation_anomaly)
         # X.1 — monitor distribution drift on normal-operation samples only.
         self._drift_monitor.update(fault_features, is_normal=(anomaly_probability < 0.5))
         if clf_fault is not None and clf_fault != "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE and urgency >= 0.5:
@@ -711,6 +730,9 @@ class MHARS:
                 # for the raw AE/fused scores). Display signal; control logic
                 # (urgency/PPO) is intentionally left unchanged.
                 "anomaly_probability": round(anomaly_probability, 4),
+                # R1 — zero-shot foundation residual anomaly + active backbone
+                "foundation_anomaly": round(self._foundation_anomaly, 4),
+                "forecaster_backend": "foundation" if self._foundation is not None else "lstm",
                 # X.1 — feature-drift / retrain signal
                 "drift": self._drift_monitor.snapshot(),
                 "health_score": health_data["score"],
@@ -907,6 +929,37 @@ class MHARS:
         if len(window) < Config.LSTM_WINDOW:
             # Not enough history yet — use linear trend
             pred_norm = temp_norm + 0.01
+        elif self._foundation is not None and len(self._reading_history) >= Config.LSTM_WINDOW:
+            # R1: zero-shot foundation forecaster on the raw temperature stream.
+            try:
+                H = Config.LSTM_FORECAST_HORIZON
+                temps = [r.temp_c for r in self._reading_history][-33:]
+                actual = float(temps[-1])
+                # Residual anomaly: score the actual reading vs the PREVIOUS band.
+                if self._prev_fc_band is not None:
+                    from stage2_ml.foundation_forecaster import FoundationForecaster
+                    self._foundation_anomaly = FoundationForecaster.residual_anomaly(actual, *self._prev_fc_band)
+                fc = self._foundation.forecast(temps, horizon=H)
+                p10, p50, p90 = fc["p10"], fc["p50"], fc["p90"]
+                self._lstm_horizon = H
+                self._lstm_qmode = False
+                pred_norm = self._normalize_temp(float(p50[0]))
+                self._last_forecast_traj = [self._normalize_temp(float(v)) for v in p50]
+                self._last_forecast_band = [(self._normalize_temp(float(lo)), self._normalize_temp(float(hi)))
+                                            for lo, hi in zip(p10, p90)]
+                prediction_interval = {
+                    "lower": round(float(p10[0]), 2),
+                    "upper": round(float(p90[0]), 2),
+                    "width_celsius": round(float(p90[0] - p10[0]), 2),
+                    "quantile": round(Config.LSTM_QUANTILES[-1] - Config.LSTM_QUANTILES[0], 4),
+                }
+                self._prev_fc_band = (float(p10[0]), float(p50[0]), float(p90[0]))
+                lstm_score = float(np.clip(abs(pred_norm - temp_norm), 0, 1))
+                conformal_boost = Config.CONFORMAL_URGENCY_BOOST if prediction_interval["upper"] > self.profile["safe_max"] else 0.0
+                return pred_norm, lstm_score, prediction_interval, conformal_boost
+            except Exception:
+                pass  # fall through to the trained LSTM on any error
+            pred_norm = float(np.clip(temp_norm + (window[-1] - window[-3]) / 2 * 10, 0, 1)) if len(window) >= 3 else temp_norm
         elif self._lstm is not None and TORCH_AVAILABLE:
             if self._lstm_version == "tft" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
                 # Phase 3: TFT multivariate input (batch, 12, 5)

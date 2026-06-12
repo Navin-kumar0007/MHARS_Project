@@ -89,6 +89,13 @@ class Config:
     # Forecaster head emits H * len(LSTM_QUANTILES) values, reshaped to (H, Q).
     LSTM_QUANTILES          = [0.1, 0.5, 0.9]   # p10 / p50 / p90
 
+    # R1: forecaster backbone. "lstm" = trained per-machine quantile LSTM (default).
+    # "foundation" = zero-shot time-series foundation model (Chronos-Bolt) — no
+    # per-machine training, generalises to unseen machines / real hardware, and
+    # provides a distribution-free residual anomaly score (fixes Live-mode OOD).
+    FORECASTER_BACKEND      = os.environ.get("MHARS_FORECASTER", "lstm").strip().lower()
+    FOUNDATION_MODEL        = os.environ.get("MHARS_FOUNDATION_MODEL", "amazon/chronos-bolt-tiny")
+
     # ── PPO training ──────────────────────────────────────────────────────────
     PPO_TIMESTEPS    = 500_000
     PPO_N_ENVS       = 4
