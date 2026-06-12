@@ -143,6 +143,10 @@ class MHARS:
         from mhars.drift_monitor import DriftMonitor
         self._drift_monitor = DriftMonitor()
 
+        # R5 — uncertainty-aware safety shield state
+        self._fc_upper_margin = 0.0
+        self._shield_status = None
+
         # R4 — label-free lifelong adaptation: buffer recent NORMAL AE windows.
         self._normal_ae_buffer = deque(maxlen=400)
         self._adapt_count = 0
@@ -587,6 +591,10 @@ class MHARS:
         lstm_pred_norm, lstm_score, prediction_interval, conformal_boost = self._compute_lstm_score(temp_norm)
         lstm_pred_celsius = self._denormalize_temp(lstm_pred_norm)
 
+        # R5 — forecast uncertainty margin (°C above current) for the safety shield.
+        self._fc_upper_margin = (max(0.0, float(prediction_interval["upper"]) - temp_celsius_val)
+                                 if prediction_interval else 0.0)
+
         # Load context modulates anomaly interpretation.
         # Idle machines amplify anomaly signals (unexpected heat when no load).
         load_factor = 1.0 + (1.0 - sr.load_pct) * 0.3
@@ -768,6 +776,8 @@ class MHARS:
                 # R4 — lifelong adaptation status
                 "adaptation": {"count": self._adapt_count, "last": self._last_adaptation,
                                "normal_buffer": len(self._normal_ae_buffer)},
+                # R5 — uncertainty-aware safety shield
+                "safety_shield": self._shield_status,
                 "health_score": health_data["score"],
                 "health_trend": health_data["trend"],
                 "health_breakdown": health_data["breakdown"],
@@ -1253,20 +1263,32 @@ class MHARS:
             else:
                 proposed_action = "do-nothing"
                 
-        # Phase 3 — Digital Twin Safety Check
+        # R5 — Uncertainty-aware safety SHIELD.
+        # Verify the proposed action against the digital twin from the WORST-CASE
+        # of the forecast (current + the upper-quantile uncertainty margin), so the
+        # shield is conservative under uncertainty. If even the worst case would
+        # breach, override to a provably safer action. The shield's intervention is
+        # exposed for transparency (R5) — the trained policy never overrides safety.
+        self._shield_status = {"active": False, "original": proposed_action,
+                               "shielded": proposed_action, "reason": None,
+                               "worst_case_c": round(current_temp_raw, 1)}
         if hasattr(self, '_digital_twin') and self._digital_twin is not None and sr is not None:
-            # Estimate current fan speed (0.0 if not cooling, 1.0 if cooling) for simulation
+            margin = max(0.0, getattr(self, "_fc_upper_margin", 0.0))   # forecast uncertainty (°C)
+            worst_temp = current_temp_raw + margin
             current_fan = 1.0 if proposed_action in ["fan+", "throttle"] else 0.0
-            # Predict next 5 seconds
             trajectory = self._digital_twin.simulate_what_if(
-                current_temp_raw, sr.load_pct, current_fan, [proposed_action], steps_per_action=5
+                worst_temp, sr.load_pct, current_fan, [proposed_action], steps_per_action=5
             )
-            # If the proposed action leads to critical failure in the next 5 seconds, override
+            self._shield_status["worst_case_c"] = round(float(max(trajectory)), 1)
             if any(t >= p["critical"] for t in trajectory):
+                self._shield_status.update({"active": True, "shielded": "emergency-shutdown",
+                                            "reason": "worst-case trajectory breaches critical"})
                 return "emergency-shutdown"
             elif any(t >= p["safe_max"] for t in trajectory) and proposed_action not in ["fan+", "throttle", "shutdown"]:
+                self._shield_status.update({"active": True, "shielded": "throttle",
+                                            "reason": "worst-case trajectory exceeds safe limit"})
                 return "throttle"
-                
+
         return proposed_action
 
     def _estimate_rul(self, current_temp: float, predicted_temp: float, safe_max: float) -> Optional[float]:

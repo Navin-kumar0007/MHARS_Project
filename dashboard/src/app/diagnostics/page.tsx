@@ -45,6 +45,7 @@ export default function DiagnosticsPage() {
       root_cause_variable: string; prescribed_action: string;
       causal_contributions: Record<string, number>; q_ext_estimate: number;
     } | null;
+    counterfactual?: { text: string; without_breach: boolean } | null;
   };
   const [diag, setDiag] = useState<Diag | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
@@ -84,6 +85,9 @@ export default function DiagnosticsPage() {
   }, [history]);
 
   const detP = latest?.metadata?.anomaly_probability as number | undefined;
+  const shield = latest?.metadata?.safety_shield as
+    | { active: boolean; shielded: string; worst_case_c: number; reason: string | null }
+    | undefined;
 
   return (
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
@@ -121,6 +125,15 @@ export default function DiagnosticsPage() {
               {diag.llm_grounded && <Badge tone="indigo">LLM-grounded</Badge>}
             </div>
             <p className="text-[13px] text-slate-300 leading-relaxed bg-white/[0.02] border border-white/[0.06] rounded-xl p-3">{diag.narrative}</p>
+            {diag.counterfactual && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
+                <FlaskConical className="w-4 h-4 text-amber-300 mt-0.5 shrink-0" />
+                <div>
+                  <div className="eyebrow text-amber-300/80">Counterfactual — what the action changes</div>
+                  <p className="text-[13px] text-slate-300 mt-0.5">{diag.counterfactual.text}</p>
+                </div>
+              </div>
+            )}
             {diag.causal_rca && diag.causal_rca.root_cause_variable !== "none" && (
               <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] p-3">
                 <div className="eyebrow mb-2 flex items-center gap-1.5"><Radar className="w-3.5 h-3.5" /> Causal counterfactual RCA (do-operator on the twin)</div>
@@ -180,7 +193,12 @@ export default function DiagnosticsPage() {
       </Card>
 
       {/* Live performance */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <Card hover title={shield?.reason || "Worst-case forecast checked against the digital twin each tick."}>
+          <div className="eyebrow">Safety Shield</div>
+          <div className="metric text-2xl mt-1" style={{ color: shield?.active ? CHART.bad : CHART.good }}>{shield?.active ? "Engaged" : "Standby"}</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">{shield?.active ? `→ ${shield.shielded}` : `worst-case ${shield?.worst_case_c ?? "--"}°C`}</div>
+        </Card>
         <Card hover><div className="eyebrow">Inference Latency (avg)</div><div className="metric text-2xl mt-1 text-teal-300">{latency.avg}</div><div className="text-[11px] text-slate-500 mt-0.5">min {latency.min} · max {latency.max}</div></Card>
         <Card hover><div className="eyebrow">Telemetry</div><div className="metric text-2xl mt-1" style={{ color: isConnected ? CHART.good : CHART.bad }}>{isConnected ? "Live" : "Down"}</div><div className="text-[11px] text-slate-500 mt-0.5">{history.length} samples buffered</div></Card>
         <Card hover><div className="eyebrow">Detector P(fault)</div><div className="metric text-2xl mt-1" style={{ color: detP != null && detP > 0.5 ? CHART.bad : CHART.good }}>{detP != null ? `${(detP * 100).toFixed(0)}%` : "--"}</div><div className="text-[11px] text-slate-500 mt-0.5">supervised classifier</div></Card>

@@ -71,6 +71,21 @@ class DiagnosticAgent:
             except Exception:
                 causal = None
 
+        # R6 — actionable counterfactual explanation (before vs after the action).
+        counterfactual = None
+        if what_if and recommended:
+            dn = next((w for w in what_if if w["action"] == "do-nothing"), None)
+            if dn is not None:
+                counterfactual = {
+                    "without_action_c": dn["final_c"], "without_breach": dn["breach"],
+                    "action": recommended["action"], "with_action_c": recommended["final_c"],
+                    "with_safe": recommended["safe"],
+                    "text": (f"If no action is taken, temperature is predicted to settle near "
+                             f"{dn['final_c']}°C{' (breaches the limit)' if dn['breach'] else ''}. "
+                             f"Taking '{recommended['action']}' instead brings it to "
+                             f"{recommended['final_c']}°C ({'within safe limits' if recommended['safe'] else 'still elevated'})."),
+                }
+
         root_cause = (causal or {}).get("root_cause_hypothesis") or fault
         severity = "critical" if urgency >= 0.8 else "warning" if urgency >= 0.5 else "normal"
         narrative, used_llm = self._narrate(state, fault, root_cause, recommended, docs, rul, safe, crit, severity)
@@ -86,6 +101,7 @@ class DiagnosticAgent:
             "fault": fault,
             "root_cause": root_cause,
             "causal_rca": rca,
+            "counterfactual": counterfactual,
             "severity": severity,
             "evidence": {
                 "temperature_c": round(temp, 1), "safe_max_c": safe, "critical_c": crit,
