@@ -143,6 +143,16 @@ class MHARS:
         from mhars.drift_monitor import DriftMonitor
         self._drift_monitor = DriftMonitor()
 
+        # R5 — uncertainty-aware safety shield state
+        self._fc_upper_margin = 0.0
+        self._shield_status = None
+
+        # R4 — label-free lifelong adaptation: buffer recent NORMAL AE windows.
+        self._normal_ae_buffer = deque(maxlen=400)
+        self._adapt_count = 0
+        self._last_adaptation = None
+        self._adapt_cooldown = 0
+
         # Issue 5 — Structured logging
         self._setup_logger()
 
@@ -167,9 +177,13 @@ class MHARS:
             
             from stage1_simulation.digital_twin import DigitalTwin
             self._digital_twin = DigitalTwin(self.profile)
+
+            from stage3_ai.counterfactual_rca import CounterfactualRCA  # R3
+            self._cf_rca = CounterfactualRCA(self.profile)
         except ImportError:
             self._causal_layer = None
             self._digital_twin = None
+            self._cf_rca = None
 
         print(f"[MHARS] Initialising for machine: {self.machine_name}")
         self._load_models(llm_path)
@@ -243,6 +257,19 @@ class MHARS:
             print(f"  ✓  Isolation Forest loaded")
         else:
             print(f"  ⚠  Isolation Forest not found — skipping noise filter")
+
+        # R1: zero-shot foundation forecaster (opt-in via MHARS_FORECASTER=foundation).
+        # Lazy — the model only downloads/loads on first forecast.
+        self._foundation = None
+        self._prev_fc_band = None       # (p10,p50,p90) of last next-step forecast
+        self._foundation_anomaly = 0.0  # zero-shot residual anomaly score
+        if getattr(Config, "FORECASTER_BACKEND", "lstm") == "foundation":
+            try:
+                from stage2_ml.foundation_forecaster import FoundationForecaster
+                self._foundation = FoundationForecaster(Config.FOUNDATION_MODEL, quantiles=Config.LSTM_QUANTILES)
+                print(f"  ✓  Foundation forecaster enabled ({Config.FOUNDATION_MODEL}, zero-shot)")
+            except Exception as e:
+                print(f"  ⚠  Foundation forecaster unavailable ({e}) — using trained LSTM")
 
         # LSTM — prefer TFT (Phase 3), fall back to V2 (BiLSTM+Attention), fall back to V1
         self._lstm = None
@@ -564,6 +591,10 @@ class MHARS:
         lstm_pred_norm, lstm_score, prediction_interval, conformal_boost = self._compute_lstm_score(temp_norm)
         lstm_pred_celsius = self._denormalize_temp(lstm_pred_norm)
 
+        # R5 — forecast uncertainty margin (°C above current) for the safety shield.
+        self._fc_upper_margin = (max(0.0, float(prediction_interval["upper"]) - temp_celsius_val)
+                                 if prediction_interval else 0.0)
+
         # Load context modulates anomaly interpretation.
         # Idle machines amplify anomaly signals (unexpected heat when no load).
         load_factor = 1.0 + (1.0 - sr.load_pct) * 0.3
@@ -637,8 +668,23 @@ class MHARS:
         # fingerprint when no model is loaded or its confidence is low.
         fault_features = self._fault_feature_vector(if_score, lstm_score, ae_score, vib_score, context, urgency)
         clf_fault, fault_confidence, anomaly_probability = self._classify_fault(fault_features)
+        # R1: when the zero-shot foundation backbone is active, use its
+        # distribution-free residual as the anomaly detector — it generalises to
+        # unseen machines / real hardware (no false-fire on out-of-distribution
+        # data), unlike the sim-trained classifier.
+        if self._foundation is not None:
+            anomaly_probability = float(self._foundation_anomaly)
         # X.1 — monitor distribution drift on normal-operation samples only.
         self._drift_monitor.update(fault_features, is_normal=(anomaly_probability < 0.5))
+
+        # R4 — buffer recent NORMAL AE windows (label-free) and adapt on drift.
+        if self._ae_version == "v2" and anomaly_probability < 0.3 and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
+            self._normal_ae_buffer.append([list(map(float, r)) for r in self._multi_sensor_window])
+        if self._adapt_cooldown > 0:
+            self._adapt_cooldown -= 1
+        if (self._drift_monitor.retrain_recommended and self._adapt_cooldown == 0
+                and len(self._normal_ae_buffer) >= 80):
+            self.adapt_online()
         if clf_fault is not None and clf_fault != "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE and urgency >= 0.5:
             fault_type = clf_fault
         elif clf_fault == "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE:
@@ -667,7 +713,16 @@ class MHARS:
         
         # Step 7.5 — Estimate RUL & Advanced Analytics
         rul_minutes = self._estimate_rul(temp_celsius_val, lstm_pred_celsius, self.profile["safe_max"])
-        
+
+        # R3 — Causal counterfactual RCA (only when concerned, to save cost).
+        causal_rca = None
+        if self._cf_rca is not None and urgency >= 0.5:
+            fan_now = 1.0 if action in ("fan+", "throttle") else 0.0
+            try:
+                causal_rca = self._cf_rca.analyze(temp_celsius_val, sr.load_pct, fan_now, sr.dT_dt)
+            except Exception:
+                causal_rca = None
+
         # Trend Analysis
         trend_stats = self._trend_analyzer.update(temp_norm)
         drift_detected = trend_stats["is_drifting"]
@@ -711,8 +766,18 @@ class MHARS:
                 # for the raw AE/fused scores). Display signal; control logic
                 # (urgency/PPO) is intentionally left unchanged.
                 "anomaly_probability": round(anomaly_probability, 4),
+                # R1 — zero-shot foundation residual anomaly + active backbone
+                "foundation_anomaly": round(self._foundation_anomaly, 4),
+                "forecaster_backend": "foundation" if self._foundation is not None else "lstm",
                 # X.1 — feature-drift / retrain signal
                 "drift": self._drift_monitor.snapshot(),
+                # R3 — causal counterfactual RCA (root cause + prescribed action)
+                "causal_rca": causal_rca,
+                # R4 — lifelong adaptation status
+                "adaptation": {"count": self._adapt_count, "last": self._last_adaptation,
+                               "normal_buffer": len(self._normal_ae_buffer)},
+                # R5 — uncertainty-aware safety shield
+                "safety_shield": self._shield_status,
                 "health_score": health_data["score"],
                 "health_trend": health_data["trend"],
                 "health_breakdown": health_data["breakdown"],
@@ -907,6 +972,37 @@ class MHARS:
         if len(window) < Config.LSTM_WINDOW:
             # Not enough history yet — use linear trend
             pred_norm = temp_norm + 0.01
+        elif self._foundation is not None and len(self._reading_history) >= Config.LSTM_WINDOW:
+            # R1: zero-shot foundation forecaster on the raw temperature stream.
+            try:
+                H = Config.LSTM_FORECAST_HORIZON
+                temps = [r.temp_c for r in self._reading_history][-33:]
+                actual = float(temps[-1])
+                # Residual anomaly: score the actual reading vs the PREVIOUS band.
+                if self._prev_fc_band is not None:
+                    from stage2_ml.foundation_forecaster import FoundationForecaster
+                    self._foundation_anomaly = FoundationForecaster.residual_anomaly(actual, *self._prev_fc_band)
+                fc = self._foundation.forecast(temps, horizon=H)
+                p10, p50, p90 = fc["p10"], fc["p50"], fc["p90"]
+                self._lstm_horizon = H
+                self._lstm_qmode = False
+                pred_norm = self._normalize_temp(float(p50[0]))
+                self._last_forecast_traj = [self._normalize_temp(float(v)) for v in p50]
+                self._last_forecast_band = [(self._normalize_temp(float(lo)), self._normalize_temp(float(hi)))
+                                            for lo, hi in zip(p10, p90)]
+                prediction_interval = {
+                    "lower": round(float(p10[0]), 2),
+                    "upper": round(float(p90[0]), 2),
+                    "width_celsius": round(float(p90[0] - p10[0]), 2),
+                    "quantile": round(Config.LSTM_QUANTILES[-1] - Config.LSTM_QUANTILES[0], 4),
+                }
+                self._prev_fc_band = (float(p10[0]), float(p50[0]), float(p90[0]))
+                lstm_score = float(np.clip(abs(pred_norm - temp_norm), 0, 1))
+                conformal_boost = Config.CONFORMAL_URGENCY_BOOST if prediction_interval["upper"] > self.profile["safe_max"] else 0.0
+                return pred_norm, lstm_score, prediction_interval, conformal_boost
+            except Exception:
+                pass  # fall through to the trained LSTM on any error
+            pred_norm = float(np.clip(temp_norm + (window[-1] - window[-3]) / 2 * 10, 0, 1)) if len(window) >= 3 else temp_norm
         elif self._lstm is not None and TORCH_AVAILABLE:
             if self._lstm_version == "tft" and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
                 # Phase 3: TFT multivariate input (batch, 12, 5)
@@ -1167,20 +1263,32 @@ class MHARS:
             else:
                 proposed_action = "do-nothing"
                 
-        # Phase 3 — Digital Twin Safety Check
+        # R5 — Uncertainty-aware safety SHIELD.
+        # Verify the proposed action against the digital twin from the WORST-CASE
+        # of the forecast (current + the upper-quantile uncertainty margin), so the
+        # shield is conservative under uncertainty. If even the worst case would
+        # breach, override to a provably safer action. The shield's intervention is
+        # exposed for transparency (R5) — the trained policy never overrides safety.
+        self._shield_status = {"active": False, "original": proposed_action,
+                               "shielded": proposed_action, "reason": None,
+                               "worst_case_c": round(current_temp_raw, 1)}
         if hasattr(self, '_digital_twin') and self._digital_twin is not None and sr is not None:
-            # Estimate current fan speed (0.0 if not cooling, 1.0 if cooling) for simulation
+            margin = max(0.0, getattr(self, "_fc_upper_margin", 0.0))   # forecast uncertainty (°C)
+            worst_temp = current_temp_raw + margin
             current_fan = 1.0 if proposed_action in ["fan+", "throttle"] else 0.0
-            # Predict next 5 seconds
             trajectory = self._digital_twin.simulate_what_if(
-                current_temp_raw, sr.load_pct, current_fan, [proposed_action], steps_per_action=5
+                worst_temp, sr.load_pct, current_fan, [proposed_action], steps_per_action=5
             )
-            # If the proposed action leads to critical failure in the next 5 seconds, override
+            self._shield_status["worst_case_c"] = round(float(max(trajectory)), 1)
             if any(t >= p["critical"] for t in trajectory):
+                self._shield_status.update({"active": True, "shielded": "emergency-shutdown",
+                                            "reason": "worst-case trajectory breaches critical"})
                 return "emergency-shutdown"
             elif any(t >= p["safe_max"] for t in trajectory) and proposed_action not in ["fan+", "throttle", "shutdown"]:
+                self._shield_status.update({"active": True, "shielded": "throttle",
+                                            "reason": "worst-case trajectory exceeds safe limit"})
                 return "throttle"
-                
+
         return proposed_action
 
     def _estimate_rul(self, current_temp: float, predicted_temp: float, safe_max: float) -> Optional[float]:
@@ -1235,6 +1343,24 @@ class MHARS:
 
         minutes = (remaining_degrees / slope) / 60.0
         return round(min(minutes, 999.0), 1)
+
+    def adapt_online(self):
+        """R4 — label-free self-supervised adaptation of the anomaly AE on the
+        buffered recent-normal windows, canary-guarded, with EVT recalibration."""
+        if self._ae_model is None or self._ae_version != "v2" or not TORCH_AVAILABLE:
+            return {"adopted": False, "reason": "no adaptable AE"}
+        if len(self._normal_ae_buffer) < 40:
+            return {"adopted": False, "reason": "insufficient normal data", "n": len(self._normal_ae_buffer)}
+        from mhars.online_adapt import OnlineAdapter
+        windows = np.array(list(self._normal_ae_buffer), dtype=np.float32)
+        adopted, new_calib, info = OnlineAdapter.adapt(self._ae_model, windows)
+        self._adapt_cooldown = 120  # ~2 min between adaptations
+        if adopted:
+            self._ae_calib = new_calib
+            self._ae_threshold = getattr(new_calib, "z_q", self._ae_threshold)
+            self._adapt_count += 1
+        self._last_adaptation = {"adopted": bool(adopted), "count": self._adapt_count, **info}
+        return self._last_adaptation
 
     def _fault_feature_vector(self, if_score, lstm_score, ae_score, vib_score, context, urgency):
         """P2.4: per-tick feature vector for the fault classifier — temperature

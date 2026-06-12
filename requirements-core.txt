@@ -47,3 +47,6 @@ passlib>=1.7.4
 bcrypt<4.0.0
 python-jose[cryptography]>=3.3.0
 python-multipart>=0.0.6  # required by FastAPI OAuth2PasswordRequestForm (login)
+
+# R1 (optional): zero-shot foundation forecaster backend (MHARS_FORECASTER=foundation)
+# chronos-forecasting

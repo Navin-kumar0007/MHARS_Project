@@ -217,6 +217,7 @@ class SystemState:
 
         # Live mode: read real hardware temp instead of simulation
         self.live_mode: bool = False
+        self._live_temp_ema: Optional[float] = None  # thermal-mass smoothing of load-driven temp
 
     @property
     def machine_profile(self) -> Dict[str, Any]:
@@ -371,8 +372,9 @@ async def get_system_status():
         return {"ok": bool(ok), "detail": detail}
 
     model_status = {
-        "Forecast (LSTM)":   entry(m._lstm is not None,
-                                   ("quantile multi-horizon" if getattr(m, "_lstm_qmode", False)
+        "Forecast":          entry(getattr(m, "_foundation", None) is not None or m._lstm is not None,
+                                   ("foundation (zero-shot)" if getattr(m, "_foundation", None) is not None
+                                    else "quantile multi-horizon" if getattr(m, "_lstm_qmode", False)
                                     else (m._lstm_version or "fallback"))),
         "Anomaly AE":        entry(m._ae_model is not None,
                                    "calibrated (EVT)" if getattr(m, "_ae_calib", None) else
@@ -449,6 +451,45 @@ async def get_model_registry():
             out.append({"name": name, "file": fn, "present": False,
                         "sha": None, "size_kb": 0, "modified": None})
     return {"registry": out}
+
+
+@app.get("/api/diagnose")
+async def diagnose():
+    """R2: run the agentic diagnostician on the latest telemetry — retrieves
+    maintenance manuals (RAG), simulates each action on the digital twin, and
+    produces a grounded root-cause diagnosis + recommended action + plan."""
+    if not state.telemetry_history:
+        raise HTTPException(status_code=503, detail="No telemetry yet — start the stream first.")
+    p = state.telemetry_history[-1]
+    meta = p.get("metadata", {}) or {}
+    try:
+        load = float(getattr(state.env, "load_level", 0.5)) if not state.live_mode else 0.5
+    except Exception:
+        load = 0.5
+    st = {
+        "machine_type": p.get("machine_type"),
+        "current_temp": p.get("current_temp"),
+        "lstm_prediction": p.get("lstm_prediction"),
+        "load_pct": load,
+        "urgency": p.get("urgency"),
+        "action": p.get("action"),
+        "fault_type": meta.get("fault_type"),
+        "top_contributor": meta.get("top_contributor"),
+        "rul_minutes": meta.get("rul_minutes"),
+        "maintenance_plan": meta.get("maintenance_plan"),
+        "anomaly_probability": meta.get("anomaly_probability"),
+        "causal_rca": meta.get("causal_rca"),
+    }
+    from mhars.diagnostic_agent import DiagnosticAgent
+    return await run_in_threadpool(DiagnosticAgent(state.mhars).diagnose, st)
+
+
+@app.post("/api/adapt", dependencies=[Depends(require_role(["operator", "admin"]))])
+async def adapt_now():
+    """R4: manually trigger label-free self-supervised adaptation of the anomaly
+    model on the buffered recent-normal data (canary-guarded)."""
+    result = await run_in_threadpool(state.mhars.adapt_online)
+    return {"status": "success", "result": result}
 
 
 @app.get("/api/eval_report")
@@ -542,6 +583,7 @@ async def toggle_mode():
     # When switching to live, reinit MHARS as CPU (the actual machine)
     if state.live_mode:
         state.reinitialize(0)  # CPU profile for real computer
+    state._live_temp_ema = None  # reset thermal smoothing on mode change
     state.action_history.clear()
     state.alert_history.clear()
     state.telemetry_history.clear()
@@ -736,19 +778,27 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
         while True:
             # ── Step 1: Get temperature ────────────────────────────────────
             if state.live_mode:
-                # LIVE MODE: read real hardware CPU temperature
-                current_temp = read_hardware_temp()
-                # Build SensorReading with real hardware context
-                from mhars.schemas import SensorReading
-                # Fix #8: Guard psutil call behind PSUTIL_AVAILABLE
+                # LIVE MODE — real-data path (Apple Silicon exposes no CPU temp
+                # sensor, so temperature is a TRANSPARENT thermal model of the
+                # machine's REAL CPU load). Inputs (load/RAM/etc) are real psutil.
                 if PSUTIL_AVAILABLE:
                     cpu_pct = psutil.cpu_percent(interval=0) / 100.0
                 else:
                     cpu_pct = 0.5
+                # Thermal model: idle ~42°C → full-load ~88°C, driven by real load.
+                target_temp = 42.0 + cpu_pct * 46.0
+                # Thermal mass: first-order lag (EMA) so temp ramps/settles like a
+                # real chip instead of jumping with instantaneous CPU% spikes.
+                if state._live_temp_ema is None:
+                    state._live_temp_ema = target_temp
+                else:
+                    state._live_temp_ema += 0.15 * (target_temp - state._live_temp_ema)
+                current_temp = round(state._live_temp_ema, 2)
+                from mhars.schemas import SensorReading
                 sr = SensorReading(
                     temp_c=current_temp,
                     load_pct=cpu_pct,
-                    ambient_c=25.0,  # could be from external sensor
+                    ambient_c=25.0,
                 )
             else:
                 # DEMO MODE: simulated environment + anomaly injection

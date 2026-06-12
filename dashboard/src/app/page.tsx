@@ -193,7 +193,12 @@ export default function DashboardPage() {
 
   const chartData = history.map((t) => ({ ...t, time: timeLabel(t.timestamp), detector: t.metadata?.anomaly_probability ?? 0 }));
   const tempSpark = history.slice(-30).map((t) => t.current_temp);
-  const detectorP = meta.anomaly_probability as number | undefined;
+  // Detector: the sim-trained classifier is unreliable on real-CPU (LIVE) data,
+  // so it's gated there — UNLESS the zero-shot foundation backbone is active,
+  // which generalises to real hardware (R1). Then the detector is shown in Live.
+  const foundationOn = meta.forecaster_backend === "foundation";
+  const detectorGated = liveMode && !foundationOn;
+  const detectorP = detectorGated ? undefined : (meta.anomaly_probability as number | undefined);
 
   // P1.5/P2.1: forward multi-horizon p50 trajectory + p10–p90 uncertainty band.
   const fcTraj = (meta.forecast_trajectory_c as number[] | null) || null;
@@ -322,13 +327,13 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={Thermometer}
-          label="Temperature"
+          label={liveMode ? "Temperature (est.)" : "Temperature"}
           value={temp != null ? temp.toFixed(1) : "--"}
           unit="°C"
           color={tColor}
-          sub={`safe ${th.safe_max}° · crit ${th.critical}°`}
+          sub={liveMode ? `estimated from live CPU load · safe ${th.safe_max}°` : `safe ${th.safe_max}° · crit ${th.critical}°`}
           spark={tempSpark}
-          title="Live temperature. Green = safe, amber = hot, red = over limit."
+          title={liveMode ? "Estimated from real CPU load (Apple Silicon exposes no temp sensor)." : "Live temperature. Green = safe, amber = hot, red = over limit."}
         />
         <StatCard
           icon={HeartPulse}
@@ -441,7 +446,7 @@ export default function DashboardPage() {
                 <span style={{ color: CHART.good }}>● Trend</span>
                 <span style={{ color: CHART.amber }}>● Pattern</span>
                 <span style={{ color: CHART.fuchsia }}>● Vibration</span>
-                <span style={{ color: CHART.bad }}>● Detector</span>
+                {!detectorGated && <span style={{ color: CHART.bad }}>● Detector{foundationOn ? " (0-shot)" : ""}</span>}
               </div>
             }
           >
@@ -451,6 +456,8 @@ export default function DashboardPage() {
                 · P(fault) {(detectorP * 100).toFixed(0)}%
               </span>
             )}
+            {detectorGated && <span className="ml-2 text-[11px] text-slate-500">· detector calibrated for simulation</span>}
+            {foundationOn && <span className="ml-2 text-[11px] text-indigo-300/80">· zero-shot foundation detector</span>}
           </CardTitle>
           <div className="h-[230px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -465,7 +472,7 @@ export default function DashboardPage() {
                 <XAxis dataKey="time" stroke={CHART.axis} fontSize={CHART.tickFont} tickMargin={8} tickLine={false} axisLine={false} />
                 <YAxis stroke={CHART.axis} fontSize={CHART.tickFont} domain={[0, 1]} tickLine={false} axisLine={false} />
                 <Tooltip contentStyle={tooltipStyle} labelStyle={tooltipLabelStyle} />
-                <Area type="monotone" dataKey="detector" name="Detector P(fault)" stroke={CHART.bad} strokeWidth={2.2} fill="url(#combFill)" dot={false} isAnimationActive={false} />
+                {!detectorGated && <Area type="monotone" dataKey="detector" name="Detector P(fault)" stroke={CHART.bad} strokeWidth={2.2} fill="url(#combFill)" dot={false} isAnimationActive={false} />}
                 <Line type="monotone" dataKey="if_score" name="Odd reading" stroke={CHART.cyan} strokeWidth={1.3} dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="lstm_score" name="Heat trend" stroke={CHART.good} strokeWidth={1.3} dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="ae_score" name="Pattern" stroke={CHART.amber} strokeWidth={1.3} dot={false} isAnimationActive={false} />

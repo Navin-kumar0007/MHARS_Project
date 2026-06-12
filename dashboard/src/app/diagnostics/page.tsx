@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useTelemetry, API_BASE } from "@/components/TelemetryProvider";
 import { Card, CardTitle, PageHeader, Badge, Progress, Awaiting, CHART } from "@/components/ui";
-import { Activity, Boxes, Gauge, ShieldCheck, Radar, Fingerprint } from "lucide-react";
+import { Activity, Boxes, Gauge, ShieldCheck, Radar, Fingerprint, Stethoscope, BookText, FlaskConical } from "lucide-react";
 
 type EvalReport = {
   generated_at: number;
@@ -34,6 +34,43 @@ export default function DiagnosticsPage() {
     | { drift_score: number; drifting: boolean; retrain_recommended: boolean; reference_ready: boolean; threshold: number }
     | undefined;
 
+  // R2 — agentic diagnostician (on-demand)
+  type Diag = {
+    fault: string; root_cause: string; severity: string; narrative: string; llm_grounded: boolean;
+    citations: { id: string; title: string; text: string }[];
+    what_if: { action: string; final_c: number; peak_c: number; breach: boolean; safe: boolean }[];
+    recommended_action: { action: string; final_c: number } | null;
+    trace: { step: string; tool: string }[];
+    causal_rca?: {
+      root_cause_variable: string; prescribed_action: string;
+      causal_contributions: Record<string, number>; q_ext_estimate: number;
+    } | null;
+    counterfactual?: { text: string; without_breach: boolean } | null;
+  };
+  const [diag, setDiag] = useState<Diag | null>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
+  const [adaptBusy, setAdaptBusy] = useState(false);
+  const [adaptMsg, setAdaptMsg] = useState<string | null>(null);
+  const adaptNow = async () => {
+    setAdaptBusy(true); setAdaptMsg(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/adapt`, { method: "POST" });
+      const d = await r.json();
+      const res = d?.result;
+      setAdaptMsg(res?.adopted ? `Adopted — canary improved ${res.improvement_pct ?? 0}% (n=${res.n})` : `No change — ${res?.reason || "canary rejected"}`);
+    } catch { setAdaptMsg("Adaptation failed"); }
+    setAdaptBusy(false);
+  };
+  const adapt = latest?.metadata?.adaptation as { count: number; normal_buffer: number; last: { adopted: boolean; improvement_pct?: number } | null } | undefined;
+  const runDiagnose = async () => {
+    setDiagBusy(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/diagnose`);
+      setDiag(r.ok ? await r.json() : null);
+    } catch { setDiag(null); }
+    setDiagBusy(false);
+  };
+
   const ms = systemStatus?.model_status || {};
   const degraded = systemStatus?.models_degraded || [];
 
@@ -48,6 +85,9 @@ export default function DiagnosticsPage() {
   }, [history]);
 
   const detP = latest?.metadata?.anomaly_probability as number | undefined;
+  const shield = latest?.metadata?.safety_shield as
+    | { active: boolean; shielded: string; worst_case_c: number; reason: string | null }
+    | undefined;
 
   return (
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
@@ -57,8 +97,108 @@ export default function DiagnosticsPage() {
         </Badge>
       </PageHeader>
 
+      {/* R2 — Agentic diagnostician */}
+      <Card accent>
+        <CardTitle
+          icon={Stethoscope}
+          right={
+            <button
+              onClick={runDiagnose}
+              disabled={diagBusy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-200 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50 transition-colors"
+            >
+              <Stethoscope className="w-3.5 h-3.5" /> {diagBusy ? "Diagnosing…" : "Run diagnosis"}
+            </button>
+          }
+        >
+          AI Diagnostician — RAG + Digital-Twin Agent
+        </CardTitle>
+        {!diag ? (
+          <p className="text-sm text-slate-500">
+            Runs an agent that retrieves maintenance manuals, simulates each action on the digital twin, and reasons about root cause — grounded, with citations. Click <span className="text-indigo-300">Run diagnosis</span>.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={diag.severity === "critical" ? "bad" : diag.severity === "warning" ? "warn" : "good"}>{diag.severity}</Badge>
+              <span className="text-sm text-slate-200"><b className="font-semibold">Root cause:</b> {diag.root_cause}</span>
+              {diag.llm_grounded && <Badge tone="indigo">LLM-grounded</Badge>}
+            </div>
+            <p className="text-[13px] text-slate-300 leading-relaxed bg-white/[0.02] border border-white/[0.06] rounded-xl p-3">{diag.narrative}</p>
+            {diag.counterfactual && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
+                <FlaskConical className="w-4 h-4 text-amber-300 mt-0.5 shrink-0" />
+                <div>
+                  <div className="eyebrow text-amber-300/80">Counterfactual — what the action changes</div>
+                  <p className="text-[13px] text-slate-300 mt-0.5">{diag.counterfactual.text}</p>
+                </div>
+              </div>
+            )}
+            {diag.causal_rca && diag.causal_rca.root_cause_variable !== "none" && (
+              <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] p-3">
+                <div className="eyebrow mb-2 flex items-center gap-1.5"><Radar className="w-3.5 h-3.5" /> Causal counterfactual RCA (do-operator on the twin)</div>
+                <div className="flex items-center gap-2 mb-2 text-xs">
+                  <span className="text-slate-400">root cause:</span>
+                  <Badge tone="indigo">{diag.causal_rca.root_cause_variable.replace(/_/g, " ")}</Badge>
+                  <span className="text-slate-400">prescribed:</span>
+                  <Badge tone="good">{diag.causal_rca.prescribed_action}</Badge>
+                </div>
+                <div className="space-y-1.5">
+                  {Object.entries(diag.causal_rca.causal_contributions).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+                    <div key={k} className="flex items-center gap-3">
+                      <span className="text-[11px] text-slate-400 w-32 capitalize">{k.replace(/_/g, " ")}</span>
+                      <div className="flex-1"><Progress value={v} color={v >= 50 ? CHART.indigo : "#475569"} /></div>
+                      <span className="metric text-[11px] w-9 text-right text-slate-300">{v}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-12 gap-4">
+              {/* What-if */}
+              <div className="col-span-12 lg:col-span-6">
+                <div className="eyebrow mb-2 flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5" /> Digital-twin what-if (predicted °C)</div>
+                <div className="space-y-1.5">
+                  {diag.what_if.map((w) => {
+                    const rec = diag.recommended_action?.action === w.action;
+                    return (
+                      <div key={w.action} className={`flex items-center justify-between rounded-lg border px-3 py-1.5 ${rec ? "border-emerald-500/40 bg-emerald-500/5" : "border-white/[0.05] bg-white/[0.02]"}`}>
+                        <span className="text-xs text-slate-300 capitalize flex items-center gap-2">{w.action}{rec && <Badge tone="good">recommended</Badge>}</span>
+                        <span className="metric text-xs" style={{ color: w.breach ? CHART.bad : w.safe ? CHART.good : CHART.warn }}>{w.final_c}°C{w.breach ? " ⚠" : ""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* Citations + trace */}
+              <div className="col-span-12 lg:col-span-6">
+                <div className="eyebrow mb-2 flex items-center gap-1.5"><BookText className="w-3.5 h-3.5" /> Cited maintenance references</div>
+                <div className="space-y-1.5">
+                  {diag.citations.map((c) => (
+                    <div key={c.id} className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-1.5">
+                      <div className="flex items-center gap-2"><span className="metric text-[10px] text-indigo-300">{c.id}</span><span className="text-xs text-slate-300">{c.title}</span></div>
+                    </div>
+                  ))}
+                </div>
+                <div className="eyebrow mt-3 mb-1">Agent tool trace</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {diag.trace.map((t, i) => (
+                    <span key={i} className="text-[10px] px-2 py-0.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-slate-400">{t.tool}: {t.step}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
+
       {/* Live performance */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <Card hover title={shield?.reason || "Worst-case forecast checked against the digital twin each tick."}>
+          <div className="eyebrow">Safety Shield</div>
+          <div className="metric text-2xl mt-1" style={{ color: shield?.active ? CHART.bad : CHART.good }}>{shield?.active ? "Engaged" : "Standby"}</div>
+          <div className="text-[11px] text-slate-500 mt-0.5">{shield?.active ? `→ ${shield.shielded}` : `worst-case ${shield?.worst_case_c ?? "--"}°C`}</div>
+        </Card>
         <Card hover><div className="eyebrow">Inference Latency (avg)</div><div className="metric text-2xl mt-1 text-teal-300">{latency.avg}</div><div className="text-[11px] text-slate-500 mt-0.5">min {latency.min} · max {latency.max}</div></Card>
         <Card hover><div className="eyebrow">Telemetry</div><div className="metric text-2xl mt-1" style={{ color: isConnected ? CHART.good : CHART.bad }}>{isConnected ? "Live" : "Down"}</div><div className="text-[11px] text-slate-500 mt-0.5">{history.length} samples buffered</div></Card>
         <Card hover><div className="eyebrow">Detector P(fault)</div><div className="metric text-2xl mt-1" style={{ color: detP != null && detP > 0.5 ? CHART.bad : CHART.good }}>{detP != null ? `${(detP * 100).toFixed(0)}%` : "--"}</div><div className="text-[11px] text-slate-500 mt-0.5">supervised classifier</div></Card>
@@ -104,6 +244,20 @@ export default function DiagnosticsPage() {
                   : drift.retrain_recommended ? "Sustained distribution shift — retraining recommended."
                   : drift.drifting ? "Distribution shifting — watching." : "Normal operating distribution stable."}
               </p>
+              {/* R4 — label-free lifelong adaptation */}
+              <div className="pt-2 mt-1 border-t border-white/[0.06] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[11px] text-slate-500">
+                  Adaptations: <span className="text-slate-300">{adapt?.count ?? 0}</span> · normal buffer {adapt?.normal_buffer ?? 0}
+                </span>
+                <button
+                  onClick={adaptNow}
+                  disabled={adaptBusy}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-teal-400/30 text-teal-200 bg-teal-400/10 hover:bg-teal-400/20 disabled:opacity-50"
+                >
+                  {adaptBusy ? "Adapting…" : "Adapt now (label-free)"}
+                </button>
+              </div>
+              {adaptMsg && <p className="text-[11px]" style={{ color: adaptMsg.startsWith("Adopted") ? CHART.good : CHART.warn }}>{adaptMsg}</p>}
             </div>
           ) : <Awaiting label="Awaiting telemetry…" />}
         </Card>
