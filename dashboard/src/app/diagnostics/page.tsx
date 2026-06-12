@@ -48,6 +48,19 @@ export default function DiagnosticsPage() {
   };
   const [diag, setDiag] = useState<Diag | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
+  const [adaptBusy, setAdaptBusy] = useState(false);
+  const [adaptMsg, setAdaptMsg] = useState<string | null>(null);
+  const adaptNow = async () => {
+    setAdaptBusy(true); setAdaptMsg(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/adapt`, { method: "POST" });
+      const d = await r.json();
+      const res = d?.result;
+      setAdaptMsg(res?.adopted ? `Adopted — canary improved ${res.improvement_pct ?? 0}% (n=${res.n})` : `No change — ${res?.reason || "canary rejected"}`);
+    } catch { setAdaptMsg("Adaptation failed"); }
+    setAdaptBusy(false);
+  };
+  const adapt = latest?.metadata?.adaptation as { count: number; normal_buffer: number; last: { adopted: boolean; improvement_pct?: number } | null } | undefined;
   const runDiagnose = async () => {
     setDiagBusy(true);
     try {
@@ -213,6 +226,20 @@ export default function DiagnosticsPage() {
                   : drift.retrain_recommended ? "Sustained distribution shift — retraining recommended."
                   : drift.drifting ? "Distribution shifting — watching." : "Normal operating distribution stable."}
               </p>
+              {/* R4 — label-free lifelong adaptation */}
+              <div className="pt-2 mt-1 border-t border-white/[0.06] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[11px] text-slate-500">
+                  Adaptations: <span className="text-slate-300">{adapt?.count ?? 0}</span> · normal buffer {adapt?.normal_buffer ?? 0}
+                </span>
+                <button
+                  onClick={adaptNow}
+                  disabled={adaptBusy}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-teal-400/30 text-teal-200 bg-teal-400/10 hover:bg-teal-400/20 disabled:opacity-50"
+                >
+                  {adaptBusy ? "Adapting…" : "Adapt now (label-free)"}
+                </button>
+              </div>
+              {adaptMsg && <p className="text-[11px]" style={{ color: adaptMsg.startsWith("Adopted") ? CHART.good : CHART.warn }}>{adaptMsg}</p>}
             </div>
           ) : <Awaiting label="Awaiting telemetry…" />}
         </Card>

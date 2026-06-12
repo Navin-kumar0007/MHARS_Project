@@ -484,6 +484,14 @@ async def diagnose():
     return await run_in_threadpool(DiagnosticAgent(state.mhars).diagnose, st)
 
 
+@app.post("/api/adapt", dependencies=[Depends(require_role(["operator", "admin"]))])
+async def adapt_now():
+    """R4: manually trigger label-free self-supervised adaptation of the anomaly
+    model on the buffered recent-normal data (canary-guarded)."""
+    result = await run_in_threadpool(state.mhars.adapt_online)
+    return {"status": "success", "result": result}
+
+
 @app.get("/api/eval_report")
 async def get_eval_report():
     """P4.3: return the offline anomaly-detection evaluation report (if present).

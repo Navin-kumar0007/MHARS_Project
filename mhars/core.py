@@ -143,6 +143,12 @@ class MHARS:
         from mhars.drift_monitor import DriftMonitor
         self._drift_monitor = DriftMonitor()
 
+        # R4 — label-free lifelong adaptation: buffer recent NORMAL AE windows.
+        self._normal_ae_buffer = deque(maxlen=400)
+        self._adapt_count = 0
+        self._last_adaptation = None
+        self._adapt_cooldown = 0
+
         # Issue 5 — Structured logging
         self._setup_logger()
 
@@ -662,6 +668,15 @@ class MHARS:
             anomaly_probability = float(self._foundation_anomaly)
         # X.1 — monitor distribution drift on normal-operation samples only.
         self._drift_monitor.update(fault_features, is_normal=(anomaly_probability < 0.5))
+
+        # R4 — buffer recent NORMAL AE windows (label-free) and adapt on drift.
+        if self._ae_version == "v2" and anomaly_probability < 0.3 and len(self._multi_sensor_window) >= Config.LSTM_WINDOW:
+            self._normal_ae_buffer.append([list(map(float, r)) for r in self._multi_sensor_window])
+        if self._adapt_cooldown > 0:
+            self._adapt_cooldown -= 1
+        if (self._drift_monitor.retrain_recommended and self._adapt_cooldown == 0
+                and len(self._normal_ae_buffer) >= 80):
+            self.adapt_online()
         if clf_fault is not None and clf_fault != "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE and urgency >= 0.5:
             fault_type = clf_fault
         elif clf_fault == "Normal Operations" and fault_confidence >= Config.FAULT_MIN_CONFIDENCE:
@@ -750,6 +765,9 @@ class MHARS:
                 "drift": self._drift_monitor.snapshot(),
                 # R3 — causal counterfactual RCA (root cause + prescribed action)
                 "causal_rca": causal_rca,
+                # R4 — lifelong adaptation status
+                "adaptation": {"count": self._adapt_count, "last": self._last_adaptation,
+                               "normal_buffer": len(self._normal_ae_buffer)},
                 "health_score": health_data["score"],
                 "health_trend": health_data["trend"],
                 "health_breakdown": health_data["breakdown"],
@@ -1303,6 +1321,24 @@ class MHARS:
 
         minutes = (remaining_degrees / slope) / 60.0
         return round(min(minutes, 999.0), 1)
+
+    def adapt_online(self):
+        """R4 — label-free self-supervised adaptation of the anomaly AE on the
+        buffered recent-normal windows, canary-guarded, with EVT recalibration."""
+        if self._ae_model is None or self._ae_version != "v2" or not TORCH_AVAILABLE:
+            return {"adopted": False, "reason": "no adaptable AE"}
+        if len(self._normal_ae_buffer) < 40:
+            return {"adopted": False, "reason": "insufficient normal data", "n": len(self._normal_ae_buffer)}
+        from mhars.online_adapt import OnlineAdapter
+        windows = np.array(list(self._normal_ae_buffer), dtype=np.float32)
+        adopted, new_calib, info = OnlineAdapter.adapt(self._ae_model, windows)
+        self._adapt_cooldown = 120  # ~2 min between adaptations
+        if adopted:
+            self._ae_calib = new_calib
+            self._ae_threshold = getattr(new_calib, "z_q", self._ae_threshold)
+            self._adapt_count += 1
+        self._last_adaptation = {"adopted": bool(adopted), "count": self._adapt_count, **info}
+        return self._last_adaptation
 
     def _fault_feature_vector(self, if_score, lstm_score, ae_score, vib_score, context, urgency):
         """P2.4: per-tick feature vector for the fault classifier — temperature
