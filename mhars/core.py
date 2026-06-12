@@ -167,9 +167,13 @@ class MHARS:
             
             from stage1_simulation.digital_twin import DigitalTwin
             self._digital_twin = DigitalTwin(self.profile)
+
+            from stage3_ai.counterfactual_rca import CounterfactualRCA  # R3
+            self._cf_rca = CounterfactualRCA(self.profile)
         except ImportError:
             self._causal_layer = None
             self._digital_twin = None
+            self._cf_rca = None
 
         print(f"[MHARS] Initialising for machine: {self.machine_name}")
         self._load_models(llm_path)
@@ -686,7 +690,16 @@ class MHARS:
         
         # Step 7.5 — Estimate RUL & Advanced Analytics
         rul_minutes = self._estimate_rul(temp_celsius_val, lstm_pred_celsius, self.profile["safe_max"])
-        
+
+        # R3 — Causal counterfactual RCA (only when concerned, to save cost).
+        causal_rca = None
+        if self._cf_rca is not None and urgency >= 0.5:
+            fan_now = 1.0 if action in ("fan+", "throttle") else 0.0
+            try:
+                causal_rca = self._cf_rca.analyze(temp_celsius_val, sr.load_pct, fan_now, sr.dT_dt)
+            except Exception:
+                causal_rca = None
+
         # Trend Analysis
         trend_stats = self._trend_analyzer.update(temp_norm)
         drift_detected = trend_stats["is_drifting"]
@@ -735,6 +748,8 @@ class MHARS:
                 "forecaster_backend": "foundation" if self._foundation is not None else "lstm",
                 # X.1 — feature-drift / retrain signal
                 "drift": self._drift_monitor.snapshot(),
+                # R3 — causal counterfactual RCA (root cause + prescribed action)
+                "causal_rca": causal_rca,
                 "health_score": health_data["score"],
                 "health_trend": health_data["trend"],
                 "health_breakdown": health_data["breakdown"],

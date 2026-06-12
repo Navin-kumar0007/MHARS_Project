@@ -41,6 +41,10 @@ export default function DiagnosticsPage() {
     what_if: { action: string; final_c: number; peak_c: number; breach: boolean; safe: boolean }[];
     recommended_action: { action: string; final_c: number } | null;
     trace: { step: string; tool: string }[];
+    causal_rca?: {
+      root_cause_variable: string; prescribed_action: string;
+      causal_contributions: Record<string, number>; q_ext_estimate: number;
+    } | null;
   };
   const [diag, setDiag] = useState<Diag | null>(null);
   const [diagBusy, setDiagBusy] = useState(false);
@@ -104,6 +108,26 @@ export default function DiagnosticsPage() {
               {diag.llm_grounded && <Badge tone="indigo">LLM-grounded</Badge>}
             </div>
             <p className="text-[13px] text-slate-300 leading-relaxed bg-white/[0.02] border border-white/[0.06] rounded-xl p-3">{diag.narrative}</p>
+            {diag.causal_rca && diag.causal_rca.root_cause_variable !== "none" && (
+              <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] p-3">
+                <div className="eyebrow mb-2 flex items-center gap-1.5"><Radar className="w-3.5 h-3.5" /> Causal counterfactual RCA (do-operator on the twin)</div>
+                <div className="flex items-center gap-2 mb-2 text-xs">
+                  <span className="text-slate-400">root cause:</span>
+                  <Badge tone="indigo">{diag.causal_rca.root_cause_variable.replace(/_/g, " ")}</Badge>
+                  <span className="text-slate-400">prescribed:</span>
+                  <Badge tone="good">{diag.causal_rca.prescribed_action}</Badge>
+                </div>
+                <div className="space-y-1.5">
+                  {Object.entries(diag.causal_rca.causal_contributions).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+                    <div key={k} className="flex items-center gap-3">
+                      <span className="text-[11px] text-slate-400 w-32 capitalize">{k.replace(/_/g, " ")}</span>
+                      <div className="flex-1"><Progress value={v} color={v >= 50 ? CHART.indigo : "#475569"} /></div>
+                      <span className="metric text-[11px] w-9 text-right text-slate-300">{v}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-12 gap-4">
               {/* What-if */}
               <div className="col-span-12 lg:col-span-6">

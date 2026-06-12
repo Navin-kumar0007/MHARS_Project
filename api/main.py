@@ -478,6 +478,7 @@ async def diagnose():
         "rul_minutes": meta.get("rul_minutes"),
         "maintenance_plan": meta.get("maintenance_plan"),
         "anomaly_probability": meta.get("anomaly_probability"),
+        "causal_rca": meta.get("causal_rca"),
     }
     from mhars.diagnostic_agent import DiagnosticAgent
     return await run_in_threadpool(DiagnosticAgent(state.mhars).diagnose, st)

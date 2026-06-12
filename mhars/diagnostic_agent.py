@@ -75,9 +75,17 @@ class DiagnosticAgent:
         severity = "critical" if urgency >= 0.8 else "warning" if urgency >= 0.5 else "normal"
         narrative, used_llm = self._narrate(state, fault, root_cause, recommended, docs, rul, safe, crit, severity)
 
+        # R3 — causal counterfactual RCA (computed in the pipeline) is the
+        # strongest causal signal; surface it + its prescribed minimal intervention.
+        rca = state.get("causal_rca")
+        if rca and rca.get("root_cause_variable") not in (None, "none"):
+            trace.append({"step": "counterfactual_rca", "tool": "digital_twin(SCM)",
+                          "result": rca.get("root_cause_variable")})
+
         return {
             "fault": fault,
             "root_cause": root_cause,
+            "causal_rca": rca,
             "severity": severity,
             "evidence": {
                 "temperature_c": round(temp, 1), "safe_max_c": safe, "critical_c": crit,
