@@ -453,6 +453,36 @@ async def get_model_registry():
     return {"registry": out}
 
 
+@app.get("/api/diagnose")
+async def diagnose():
+    """R2: run the agentic diagnostician on the latest telemetry — retrieves
+    maintenance manuals (RAG), simulates each action on the digital twin, and
+    produces a grounded root-cause diagnosis + recommended action + plan."""
+    if not state.telemetry_history:
+        raise HTTPException(status_code=503, detail="No telemetry yet — start the stream first.")
+    p = state.telemetry_history[-1]
+    meta = p.get("metadata", {}) or {}
+    try:
+        load = float(getattr(state.env, "load_level", 0.5)) if not state.live_mode else 0.5
+    except Exception:
+        load = 0.5
+    st = {
+        "machine_type": p.get("machine_type"),
+        "current_temp": p.get("current_temp"),
+        "lstm_prediction": p.get("lstm_prediction"),
+        "load_pct": load,
+        "urgency": p.get("urgency"),
+        "action": p.get("action"),
+        "fault_type": meta.get("fault_type"),
+        "top_contributor": meta.get("top_contributor"),
+        "rul_minutes": meta.get("rul_minutes"),
+        "maintenance_plan": meta.get("maintenance_plan"),
+        "anomaly_probability": meta.get("anomaly_probability"),
+    }
+    from mhars.diagnostic_agent import DiagnosticAgent
+    return await run_in_threadpool(DiagnosticAgent(state.mhars).diagnose, st)
+
+
 @app.get("/api/eval_report")
 async def get_eval_report():
     """P4.3: return the offline anomaly-detection evaluation report (if present).

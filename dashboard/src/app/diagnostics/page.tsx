@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useTelemetry, API_BASE } from "@/components/TelemetryProvider";
 import { Card, CardTitle, PageHeader, Badge, Progress, Awaiting, CHART } from "@/components/ui";
-import { Activity, Boxes, Gauge, ShieldCheck, Radar, Fingerprint } from "lucide-react";
+import { Activity, Boxes, Gauge, ShieldCheck, Radar, Fingerprint, Stethoscope, BookText, FlaskConical } from "lucide-react";
 
 type EvalReport = {
   generated_at: number;
@@ -34,6 +34,25 @@ export default function DiagnosticsPage() {
     | { drift_score: number; drifting: boolean; retrain_recommended: boolean; reference_ready: boolean; threshold: number }
     | undefined;
 
+  // R2 — agentic diagnostician (on-demand)
+  type Diag = {
+    fault: string; root_cause: string; severity: string; narrative: string; llm_grounded: boolean;
+    citations: { id: string; title: string; text: string }[];
+    what_if: { action: string; final_c: number; peak_c: number; breach: boolean; safe: boolean }[];
+    recommended_action: { action: string; final_c: number } | null;
+    trace: { step: string; tool: string }[];
+  };
+  const [diag, setDiag] = useState<Diag | null>(null);
+  const [diagBusy, setDiagBusy] = useState(false);
+  const runDiagnose = async () => {
+    setDiagBusy(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/diagnose`);
+      setDiag(r.ok ? await r.json() : null);
+    } catch { setDiag(null); }
+    setDiagBusy(false);
+  };
+
   const ms = systemStatus?.model_status || {};
   const degraded = systemStatus?.models_degraded || [];
 
@@ -56,6 +75,72 @@ export default function DiagnosticsPage() {
           {degraded.length === 0 ? "All models live" : `${degraded.length} in fallback`}
         </Badge>
       </PageHeader>
+
+      {/* R2 — Agentic diagnostician */}
+      <Card accent>
+        <CardTitle
+          icon={Stethoscope}
+          right={
+            <button
+              onClick={runDiagnose}
+              disabled={diagBusy}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-200 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50 transition-colors"
+            >
+              <Stethoscope className="w-3.5 h-3.5" /> {diagBusy ? "Diagnosing…" : "Run diagnosis"}
+            </button>
+          }
+        >
+          AI Diagnostician — RAG + Digital-Twin Agent
+        </CardTitle>
+        {!diag ? (
+          <p className="text-sm text-slate-500">
+            Runs an agent that retrieves maintenance manuals, simulates each action on the digital twin, and reasons about root cause — grounded, with citations. Click <span className="text-indigo-300">Run diagnosis</span>.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tone={diag.severity === "critical" ? "bad" : diag.severity === "warning" ? "warn" : "good"}>{diag.severity}</Badge>
+              <span className="text-sm text-slate-200"><b className="font-semibold">Root cause:</b> {diag.root_cause}</span>
+              {diag.llm_grounded && <Badge tone="indigo">LLM-grounded</Badge>}
+            </div>
+            <p className="text-[13px] text-slate-300 leading-relaxed bg-white/[0.02] border border-white/[0.06] rounded-xl p-3">{diag.narrative}</p>
+            <div className="grid grid-cols-12 gap-4">
+              {/* What-if */}
+              <div className="col-span-12 lg:col-span-6">
+                <div className="eyebrow mb-2 flex items-center gap-1.5"><FlaskConical className="w-3.5 h-3.5" /> Digital-twin what-if (predicted °C)</div>
+                <div className="space-y-1.5">
+                  {diag.what_if.map((w) => {
+                    const rec = diag.recommended_action?.action === w.action;
+                    return (
+                      <div key={w.action} className={`flex items-center justify-between rounded-lg border px-3 py-1.5 ${rec ? "border-emerald-500/40 bg-emerald-500/5" : "border-white/[0.05] bg-white/[0.02]"}`}>
+                        <span className="text-xs text-slate-300 capitalize flex items-center gap-2">{w.action}{rec && <Badge tone="good">recommended</Badge>}</span>
+                        <span className="metric text-xs" style={{ color: w.breach ? CHART.bad : w.safe ? CHART.good : CHART.warn }}>{w.final_c}°C{w.breach ? " ⚠" : ""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* Citations + trace */}
+              <div className="col-span-12 lg:col-span-6">
+                <div className="eyebrow mb-2 flex items-center gap-1.5"><BookText className="w-3.5 h-3.5" /> Cited maintenance references</div>
+                <div className="space-y-1.5">
+                  {diag.citations.map((c) => (
+                    <div key={c.id} className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-1.5">
+                      <div className="flex items-center gap-2"><span className="metric text-[10px] text-indigo-300">{c.id}</span><span className="text-xs text-slate-300">{c.title}</span></div>
+                    </div>
+                  ))}
+                </div>
+                <div className="eyebrow mt-3 mb-1">Agent tool trace</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {diag.trace.map((t, i) => (
+                    <span key={i} className="text-[10px] px-2 py-0.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-slate-400">{t.tool}: {t.step}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
 
       {/* Live performance */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
