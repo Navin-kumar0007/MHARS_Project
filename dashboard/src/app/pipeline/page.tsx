@@ -23,9 +23,9 @@ function timeLabel(ts: number) {
 }
 
 function scoreTone(score: number) {
-  if (score > 0.6) return { border: "border-rose-500/60", glow: "bg-rose-500/10", text: "text-rose-300" };
-  if (score > 0.3) return { border: "border-amber-500/60", glow: "bg-amber-500/10", text: "text-amber-300" };
-  return { border: "border-emerald-500/40", glow: "bg-emerald-500/5", text: "text-emerald-300" };
+  if (score > 0.6) return { border: "border-rose-500/60", glow: "bg-rose-500/10", text: "text-rose-700" };
+  if (score > 0.3) return { border: "border-amber-500/60", glow: "bg-amber-500/10", text: "text-amber-700" };
+  return { border: "border-emerald-500/40", glow: "bg-emerald-500/5", text: "text-emerald-700" };
 }
 
 function Node({ label, sub, score }: { label: string; sub: string; score: number }) {
@@ -33,14 +33,14 @@ function Node({ label, sub, score }: { label: string; sub: string; score: number
   return (
     <div className={`rounded-xl border ${t.border} ${t.glow} p-4 text-center transition-all duration-500`}>
       <div className="eyebrow mb-1">{sub}</div>
-      <div className="text-[13px] font-semibold text-slate-100 mb-2">{label}</div>
+      <div className="text-[13px] font-semibold text-[var(--text)] mb-2">{label}</div>
       <div className={`metric text-xl ${t.text}`}>{score.toFixed(3)}</div>
     </div>
   );
 }
 
 function Connector() {
-  return <div className="flex justify-center"><div className="w-px h-6 bg-gradient-to-b from-white/[0.18] to-transparent" /></div>;
+  return <div className="flex justify-center"><div className="w-px h-6 bg-gradient-to-b from-[var(--border-strong)] to-transparent" /></div>;
 }
 
 function PipelineFlow({ ifScore, lstmScore, aeScore, vibScore, contextScore, urgency, action, route }: {
@@ -48,15 +48,15 @@ function PipelineFlow({ ifScore, lstmScore, aeScore, vibScore, contextScore, urg
   contextScore: number; urgency: number; action: string; route: string;
 }) {
   const ct = scoreTone(contextScore);
-  const routeColor = route === "edge" ? "border-cyan-500/50 bg-cyan-500/5 text-cyan-300"
-    : route === "cloud" ? "border-blue-500/50 bg-blue-500/5 text-blue-300"
-    : "border-indigo-500/50 bg-indigo-500/5 text-indigo-300";
+  const routeColor = route === "edge" ? "border-cyan-500/50 bg-cyan-500/5 text-sky-700"
+    : route === "cloud" ? "border-blue-500/50 bg-blue-500/5 text-blue-700"
+    : "border-indigo-500/50 bg-indigo-500/5 text-indigo-600";
   return (
     <div className="space-y-5">
       <div className="flex justify-center">
-        <div className="rounded-xl bg-white/[0.03] border border-white/[0.08] px-6 py-3 text-center">
+        <div className="rounded-xl bg-[var(--surface-3)] border border-[var(--border)] px-6 py-3 text-center">
           <div className="eyebrow">Input</div>
-          <div className="text-sm font-semibold text-slate-100 mt-0.5">Sensor Telemetry</div>
+          <div className="text-sm font-semibold text-[var(--text)] mt-0.5">Sensor Telemetry</div>
         </div>
       </div>
       <Connector />
@@ -70,11 +70,11 @@ function PipelineFlow({ ifScore, lstmScore, aeScore, vibScore, contextScore, urg
       <div className="flex justify-center">
         <div className={`rounded-xl border ${ct.border} ${ct.glow} p-4 text-center w-72 transition-all duration-500`}>
           <div className="eyebrow mb-1">Attention-Weighted</div>
-          <div className="text-[13px] font-semibold text-slate-100 mb-2">Fusion Layer</div>
+          <div className="text-[13px] font-semibold text-[var(--text)] mb-2">Fusion Layer</div>
           <div className="flex items-center justify-center gap-5">
-            <div><div className="text-[10px] text-slate-500">Context</div><div className="metric text-lg text-slate-100">{contextScore.toFixed(3)}</div></div>
-            <div className="w-px h-8 bg-white/[0.1]" />
-            <div><div className="text-[10px] text-slate-500">Urgency</div><div className="metric text-lg text-slate-100">{urgency.toFixed(3)}</div></div>
+            <div><div className="text-[10px] text-[var(--text-dim)]">Context</div><div className="metric text-lg text-[var(--text)]">{contextScore.toFixed(3)}</div></div>
+            <div className="w-px h-8 bg-[var(--surface-3)]" />
+            <div><div className="text-[10px] text-[var(--text-dim)]">Urgency</div><div className="metric text-lg text-[var(--text)]">{urgency.toFixed(3)}</div></div>
           </div>
         </div>
       </div>
@@ -82,12 +82,12 @@ function PipelineFlow({ ifScore, lstmScore, aeScore, vibScore, contextScore, urg
       <div className="grid grid-cols-2 gap-4 max-w-lg mx-auto">
         <div className="rounded-xl border border-indigo-500/50 bg-indigo-500/5 p-4 text-center">
           <div className="eyebrow mb-1">Reinforcement Learning</div>
-          <div className="text-[13px] font-semibold text-slate-100 mb-2">PPO Agent</div>
-          <div className="metric text-lg text-indigo-300 uppercase">{action}</div>
+          <div className="text-[13px] font-semibold text-[var(--text)] mb-2">PPO Agent</div>
+          <div className="metric text-lg text-indigo-600 uppercase">{action}</div>
         </div>
         <div className={`rounded-xl border ${routeColor} p-4 text-center`}>
           <div className="eyebrow mb-1">Inference Path</div>
-          <div className="text-[13px] font-semibold text-slate-100 mb-2">Router</div>
+          <div className="text-[13px] font-semibold text-[var(--text)] mb-2">Router</div>
           <div className="metric text-lg uppercase">{route}</div>
         </div>
       </div>
@@ -110,7 +110,7 @@ export default function PipelinePage() {
 
   return (
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
-      <PageHeader icon={GitBranch} title="AI Pipeline Deep Dive" subtitle="Every model in the MHARS decision chain, live" accent="#818cf8" />
+      <PageHeader icon={GitBranch} title="AI Pipeline Deep Dive" subtitle="Every model in the MHARS decision chain, live" accent="#5e6ad2" />
 
       <Card>
         <CardTitle icon={GitBranch}>Live Pipeline State</CardTitle>
@@ -165,9 +165,9 @@ export default function PipelinePage() {
         <CardTitle icon={Eye}>PPO Agent Observation Vector (What the RL Agent Sees)</CardTitle>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {obs.map((val, idx) => (
-            <div key={idx} className="rounded-xl bg-white/[0.03] border border-white/[0.06] p-3 text-center">
+            <div key={idx} className="rounded-xl bg-[var(--surface-3)] border border-[var(--border)] p-3 text-center">
               <div className="eyebrow mb-1">{OBS_LABELS[idx] || `dim[${idx}]`}</div>
-              <div className="metric text-lg text-slate-100">{val.toFixed(3)}</div>
+              <div className="metric text-lg text-[var(--text)]">{val.toFixed(3)}</div>
             </div>
           ))}
         </div>

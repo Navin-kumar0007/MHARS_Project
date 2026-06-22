@@ -518,7 +518,8 @@ class MHARS:
     def run(self, temp_celsius: Union[float, 'SensorReading'] = None,
             extra_scores: Optional[Dict] = None,
             sync_alert: bool = False,
-            reading: Optional['SensorReading'] = None) -> MHARSResult:
+            reading: Optional['SensorReading'] = None,
+            live_mode: bool = False) -> MHARSResult:
         """
         Run the full MHARS pipeline on a sensor reading.
 
@@ -725,15 +726,19 @@ class MHARS:
 
         # Trend Analysis
         trend_stats = self._trend_analyzer.update(temp_norm)
-        drift_detected = trend_stats["is_drifting"]
-        
+        # In LIVE mode the models run on out-of-distribution host telemetry, so a
+        # permanent baseline mismatch reads as "drift". That is expected, not a
+        # fault — do not treat it as concept drift (no banner, no health penalty).
+        drift_detected = trend_stats["is_drifting"] and not live_mode
+
         # Health Score & Maintenance Schedule
         health_data = self._health_engine.compute(
             current_temp=temp_celsius_val,
             anomaly_score=ae_score,
             rul_minutes=rul_minutes,
             vib_score=vib_score,
-            drift_detected=drift_detected
+            drift_detected=drift_detected,
+            live_mode=live_mode,
         )
         
         maintenance_plan = self._maintenance_scheduler.schedule(rul_minutes, health_data["score"])
@@ -1332,14 +1337,23 @@ class MHARS:
         denom = sum((x - mean_x) ** 2 for x in xs) or 1e-6
         slope = sum((xs[i] - mean_x) * (temps[i] - mean_y) for i in range(n)) / denom  # °C/sec
 
-        # Require a genuine, sustained climb (> ~1.2°C/min) before reporting a
-        # time-to-limit; otherwise the machine is effectively stable.
-        if slope <= 0.02:
-            return None
-
         remaining_degrees = safe_max - current_temp
         if remaining_degrees <= 0:
             return 0.0  # already past threshold
+
+        # Require a genuine, sustained climb (> ~3°C/min) before reporting a
+        # time-to-limit; otherwise the machine is effectively stable. (Raised
+        # from 0.02 — that was low enough that idle CPU-load ripple in live mode
+        # produced a spurious "minutes to limit" while temperature was flat.)
+        if slope <= 0.05:
+            return None
+
+        # Headroom guard: far below the safe limit, a weak drift is not a failure
+        # trajectory. Only project a time-to-limit when either the machine is
+        # within 10°C of the limit OR it is genuinely climbing fast (>0.15°C/s ≈
+        # 9°C/min). A 0.04°C/s ripple at 48°C (limit 85°C) → "Stable", not 14m.
+        if remaining_degrees > 10.0 and slope < 0.15:
+            return None
 
         minutes = (remaining_degrees / slope) / 60.0
         return round(min(minutes, 999.0), 1)

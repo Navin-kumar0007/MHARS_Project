@@ -67,7 +67,7 @@ export default function HistoryPage() {
 
   return (
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
-      <PageHeader icon={ScrollText} title="History & Logs" subtitle="Timeline of RL actions, LLM alerts and temperature" accent="#34d399" />
+      <PageHeader icon={ScrollText} title="History & Logs" subtitle="Timeline of RL actions, LLM alerts and temperature" accent="#10b981" />
 
       <Card>
         <CardTitle>Full Temperature History (last ~2 minutes)</CardTitle>
@@ -98,13 +98,13 @@ export default function HistoryPage() {
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => setActiveTab("actions")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "actions" ? "bg-teal-400/10 text-teal-300 border border-teal-400/30" : "text-slate-500 hover:text-slate-300 border border-transparent"}`}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "actions" ? "bg-indigo-400/10 text-indigo-600 border border-indigo-400/30" : "text-[var(--text-dim)] hover:text-[var(--text)] border border-transparent"}`}
           >
             <Clock className="w-4 h-4 inline mr-2" /> Action Timeline ({actions.length})
           </button>
           <button
             onClick={() => setActiveTab("alerts")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "alerts" ? "bg-indigo-400/10 text-indigo-300 border border-indigo-400/30" : "text-slate-500 hover:text-slate-300 border border-transparent"}`}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "alerts" ? "bg-indigo-400/10 text-indigo-600 border border-indigo-400/30" : "text-[var(--text-dim)] hover:text-[var(--text)] border border-transparent"}`}
           >
             <AlertTriangle className="w-4 h-4 inline mr-2" /> Alert Log ({alerts.length})
           </button>
@@ -114,7 +114,7 @@ export default function HistoryPage() {
           <Card className="!p-0 overflow-hidden">
             <div className="max-h-[420px] overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-[#0c1120] border-b border-white/[0.08] z-10">
+                <thead className="sticky top-0 bg-[var(--surface)] border-b border-[var(--border)] z-10">
                   <tr className="eyebrow">
                     <th className="text-left px-5 py-3 font-semibold">Time</th>
                     <th className="text-left px-5 py-3 font-semibold">Action</th>
@@ -126,25 +126,25 @@ export default function HistoryPage() {
                 </thead>
                 <tbody>
                   {[...actions].reverse().map((entry, idx) => (
-                    <tr key={idx} className="border-b border-white/[0.04] hover:bg-white/[0.03] transition-colors">
-                      <td className="px-5 py-3 metric text-xs text-slate-400">{timeLabel(entry.timestamp)}</td>
+                    <tr key={idx} className="border-b border-[var(--border)] hover:bg-[var(--surface-hover)] transition-colors">
+                      <td className="px-5 py-3 metric text-xs text-[var(--text-dim)]">{timeLabel(entry.timestamp)}</td>
                       <td className="px-5 py-3"><Badge tone={actionTone(entry.action)}>{entry.action}</Badge></td>
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 bg-white/[0.08] rounded-full overflow-hidden">
+                          <div className="w-16 h-1.5 bg-[var(--surface-3)] rounded-full overflow-hidden">
                             <div className="h-full rounded-full" style={{ width: `${entry.urgency * 100}%`, background: entry.urgency > 0.8 ? CHART.crit : entry.urgency > 0.5 ? CHART.warn : CHART.indigo }} />
                           </div>
-                          <span className="metric text-xs text-slate-400">{entry.urgency.toFixed(3)}</span>
+                          <span className="metric text-xs text-[var(--text-dim)]">{entry.urgency.toFixed(3)}</span>
                         </div>
                       </td>
-                      <td className="px-5 py-3"><span className={`text-xs font-semibold uppercase ${entry.route === "edge" ? "text-cyan-300" : entry.route === "cloud" ? "text-blue-300" : "text-indigo-300"}`}>{entry.route}</span></td>
-                      <td className="px-5 py-3 metric text-xs text-slate-300">{entry.temp.toFixed(1)}°C</td>
-                      <td className="px-5 py-3 text-right metric text-xs text-slate-500">{entry.latency_ms.toFixed(1)}ms</td>
+                      <td className="px-5 py-3"><span className={`text-xs font-semibold uppercase ${entry.route === "edge" ? "text-sky-700" : entry.route === "cloud" ? "text-blue-700" : "text-indigo-600"}`}>{entry.route}</span></td>
+                      <td className="px-5 py-3 metric text-xs text-[var(--text)]">{entry.temp.toFixed(1)}°C</td>
+                      <td className="px-5 py-3 text-right metric text-xs text-[var(--text-dim)]">{entry.latency_ms.toFixed(1)}ms</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {actions.length === 0 && <div className="text-center py-12 text-slate-600 text-sm">No actions recorded yet.</div>}
+              {actions.length === 0 && <div className="text-center py-12 text-[var(--text-muted)] text-sm">No actions recorded yet.</div>}
             </div>
           </Card>
         )}
@@ -153,7 +153,7 @@ export default function HistoryPage() {
           <Card className="!p-0 overflow-hidden">
             <div className="max-h-[420px] overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-[#0c1120] border-b border-white/[0.08] z-10">
+                <thead className="sticky top-0 bg-[var(--surface)] border-b border-[var(--border)] z-10">
                   <tr className="eyebrow">
                     <th className="text-left px-5 py-3 font-semibold">Time</th>
                     <th className="text-left px-5 py-3 font-semibold">Severity</th>
@@ -163,16 +163,16 @@ export default function HistoryPage() {
                 </thead>
                 <tbody>
                   {[...alerts].reverse().map((entry, idx) => (
-                    <tr key={idx} className="border-b border-white/[0.04] hover:bg-white/[0.03] transition-colors">
-                      <td className="px-5 py-3 metric text-xs text-slate-400 whitespace-nowrap">{timeLabel(entry.timestamp)}</td>
+                    <tr key={idx} className="border-b border-[var(--border)] hover:bg-[var(--surface-hover)] transition-colors">
+                      <td className="px-5 py-3 metric text-xs text-[var(--text-dim)] whitespace-nowrap">{timeLabel(entry.timestamp)}</td>
                       <td className="px-5 py-3"><Badge tone={entry.severity === "critical" ? "bad" : entry.severity === "warning" ? "warn" : "good"}>{entry.severity}</Badge></td>
-                      <td className="px-5 py-3"><span className="text-xs bg-white/[0.04] text-slate-300 px-2 py-0.5 rounded border border-white/[0.08]">{entry.source}</span></td>
-                      <td className="px-5 py-3 text-xs text-slate-300 max-w-md">{entry.alert}</td>
+                      <td className="px-5 py-3"><span className="text-xs bg-[var(--surface-3)] text-[var(--text)] px-2 py-0.5 rounded border border-[var(--border)]">{entry.source}</span></td>
+                      <td className="px-5 py-3 text-xs text-[var(--text)] max-w-md">{entry.alert}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {alerts.length === 0 && <div className="text-center py-12 text-slate-600 text-sm">No alerts generated yet.</div>}
+              {alerts.length === 0 && <div className="text-center py-12 text-[var(--text-muted)] text-sm">No alerts generated yet.</div>}
             </div>
           </Card>
         )}

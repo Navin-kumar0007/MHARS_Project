@@ -46,6 +46,7 @@ import {
   PageHeader,
   Progress,
   Awaiting,
+  RadialGauge,
   CHART,
   tooltipStyle,
   tooltipLabelStyle,
@@ -61,35 +62,35 @@ function timeLabel(ts: number) {
 function decisionInfo(action: string | undefined) {
   switch (action) {
     case "do-nothing":
-      return { text: "All Clear", tone: "good", color: "#34d399", tip: "No action needed — machine is healthy." };
+      return { text: "All Clear", tone: "good", color: "#10b981", tip: "No action needed — machine is healthy." };
     case "fan+":
     case "increase-fan":
-      return { text: "Cooling Up", tone: "warn", color: "#fbbf24", tip: "AI increased cooling to bring temperature down." };
+      return { text: "Cooling Up", tone: "warn", color: "#f59e0b", tip: "AI increased cooling to bring temperature down." };
     case "throttle":
-      return { text: "Throttling", tone: "warn", color: "#fb923c", tip: "AI reduced workload to limit heat." };
+      return { text: "Throttling", tone: "warn", color: "#ea580c", tip: "AI reduced workload to limit heat." };
     case "alert":
-      return { text: "Warning", tone: "warn", color: "#fbbf24", tip: "AI raised a warning — operator attention advised." };
+      return { text: "Warning", tone: "warn", color: "#f59e0b", tip: "AI raised a warning — operator attention advised." };
     case "shutdown":
     case "emergency-shutdown":
       return { text: "Shutdown", tone: "bad", color: "#ef4444", tip: "AI triggered an emergency stop to prevent damage." };
     default:
-      return { text: "Standby", tone: "neutral", color: "#5d6b82", tip: "Waiting for telemetry." };
+      return { text: "Standby", tone: "neutral", color: "#8b91a1", tip: "Waiting for telemetry." };
   }
 }
 
 function routeInfo(route: string | undefined) {
-  if (route === "edge") return { color: "#22d3ee", tip: "Handled locally on the machine — fastest, used when urgent." };
+  if (route === "edge") return { color: "#0ea5e9", tip: "Handled locally on the machine — fastest, used when urgent." };
   if (route === "cloud") return { color: "#60a5fa", tip: "Deferred to the cloud — used when there is time." };
-  if (route === "both") return { color: "#818cf8", tip: "Run in both places at once for safety." };
-  return { color: "#5d6b82", tip: "Where the AI runs its decision." };
+  if (route === "both") return { color: "#5e6ad2", tip: "Run in both places at once for safety." };
+  return { color: "#8b91a1", tip: "Where the AI runs its decision." };
 }
 
 const ANOMALY_BUTTONS = [
   { type: "temperature_spike", label: "Heat Spike", icon: Flame, color: "#ef4444", tip: "Sudden +8°C overload." },
-  { type: "bearing_wear", label: "Bearing Wear", icon: Settings, color: "#fbbf24", tip: "Gradual friction heat over 10s." },
-  { type: "fan_blockage", label: "Fan Blockage", icon: Wind, color: "#fb923c", tip: "Cooling failure for 15s." },
-  { type: "sensor_drift", label: "Sensor Drift", icon: Radio, color: "#22d3ee", tip: "Faulty sensor adds ±3°C noise." },
-  { type: "power_surge", label: "Power Surge", icon: BatteryWarning, color: "#e879f9", tip: "Electrical fault, +12°C spike." },
+  { type: "bearing_wear", label: "Bearing Wear", icon: Settings, color: "#f59e0b", tip: "Gradual friction heat over 10s." },
+  { type: "fan_blockage", label: "Fan Blockage", icon: Wind, color: "#ea580c", tip: "Cooling failure for 15s." },
+  { type: "sensor_drift", label: "Sensor Drift", icon: Radio, color: "#0ea5e9", tip: "Faulty sensor adds ±3°C noise." },
+  { type: "power_surge", label: "Power Surge", icon: BatteryWarning, color: "#d946ef", tip: "Electrical fault, +12°C spike." },
 ];
 
 // Only the four trained modalities with real signal. CNN (Heat Camera) and
@@ -102,7 +103,7 @@ const XAI_ROWS: { key: string; label: string; meaning: string; model: string }[]
 ];
 
 function statusColor(s: string) {
-  return s === "critical" ? "#f87171" : s === "warning" ? "#fbbf24" : "#34d399";
+  return s === "critical" ? "#ef4444" : s === "warning" ? "#f59e0b" : "#10b981";
 }
 
 function fmtUptime(sec: number) {
@@ -114,15 +115,18 @@ function fmtUptime(sec: number) {
 
 function KpiTile({ icon: Icon, label, value, tip }: { icon: React.ElementType; label: string; value: string; tip: string }) {
   return (
-    <Card hover className="!p-3.5 flex items-center gap-3" title={tip}>
-      <div className="grid place-items-center w-9 h-9 rounded-lg bg-white/[0.04] shrink-0">
-        <Icon className="w-4 h-4 text-slate-400" />
+    <div
+      className="card-hover flex items-center gap-3 pl-2 pr-4 py-2 rounded-full bg-[var(--surface)] border border-[var(--border)] shadow-[var(--sh-1)]"
+      title={tip}
+    >
+      <div className="grid place-items-center w-9 h-9 rounded-full bg-indigo-50 border border-indigo-100 shrink-0">
+        <Icon className="w-4 h-4 text-indigo-500" />
       </div>
       <div className="min-w-0">
         <div className="eyebrow leading-tight">{label}</div>
-        <div className="metric text-sm text-slate-100 leading-tight mt-0.5">{value}</div>
+        <div className="metric text-sm text-[var(--text)] leading-tight mt-0.5">{value}</div>
       </div>
-    </Card>
+    </div>
   );
 }
 
@@ -147,7 +151,7 @@ export default function DashboardPage() {
   const th = latest?.thresholds || { idle: 40, safe_max: 80, critical: 95 };
   const temp = latest?.current_temp;
   const tColor =
-    temp != null ? (temp >= th.critical ? "#f87171" : temp >= th.safe_max ? "#fbbf24" : "#34d399") : "#5d6b82";
+    temp != null ? (temp >= th.critical ? "#ef4444" : temp >= th.safe_max ? "#f59e0b" : "#10b981") : "#8b91a1";
   const decision = decisionInfo(latest?.action);
   const route = routeInfo(latest?.route);
   const sh = latest?.system_health;
@@ -167,11 +171,11 @@ export default function DashboardPage() {
   // Time-to-limit (RUL)
   const rul = meta.rul_minutes as number | null | undefined;
   let rulText = "Stable";
-  let rulColor = "#34d399";
+  let rulColor = "#10b981";
   if (rul != null && rul > 0) {
-    if (rul > 60) { rulText = ">1h"; rulColor = "#34d399"; }
-    else if (rul > 15) { rulText = `${Math.round(rul)}m`; rulColor = "#fbbf24"; }
-    else { rulText = `${Math.round(rul)}m`; rulColor = "#f87171"; }
+    if (rul > 60) { rulText = ">1h"; rulColor = "#10b981"; }
+    else if (rul > 15) { rulText = `${Math.round(rul)}m`; rulColor = "#f59e0b"; }
+    else { rulText = `${Math.round(rul)}m`; rulColor = "#ef4444"; }
   }
 
   // XAI contributions
@@ -267,18 +271,18 @@ export default function DashboardPage() {
   }, [history]);
 
   const maintColor =
-    maint?.urgency_level === "critical" ? "#f87171"
-    : maint?.urgency_level === "high" ? "#fb923c"
-    : maint?.urgency_level === "medium" ? "#fbbf24"
+    maint?.urgency_level === "critical" ? "#ef4444"
+    : maint?.urgency_level === "high" ? "#ea580c"
+    : maint?.urgency_level === "medium" ? "#f59e0b"
     : maint?.urgency_level === "low" ? "#eab308"
-    : "#34d399";
+    : "#10b981";
 
   return (
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
       {/* Header */}
       <PageHeader icon={Activity} title="Operations Overview" subtitle={latest?.machine_type ? `Monitoring · ${latest.machine_type}` : "Real-time machine health monitoring"}>
         <Badge tone={liveMode ? "bad" : "info"} className={liveMode ? "" : ""}>
-          <span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: liveMode ? "#f87171" : "#22d3ee", color: liveMode ? "#f87171" : "#22d3ee" }} />
+          <span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: liveMode ? "#ef4444" : "#0ea5e9", color: liveMode ? "#ef4444" : "#0ea5e9" }} />
           {liveMode ? "LIVE · Real HW" : "DEMO · Sim"}
         </Badge>
         <Badge tone={isConnected ? "good" : "bad"}>{isConnected ? "Link OK" : "No Link"}</Badge>
@@ -290,12 +294,12 @@ export default function DashboardPage() {
             {degraded.length === 0 ? "Models ✓" : `${degraded.length} fallback`}
           </Badge>
         )}
-        <span className="metric text-xs text-slate-500 px-2">{clock}</span>
+        <span className="metric text-xs text-[var(--text-dim)] px-2">{clock}</span>
         {can("download_report") && (
           <button
             onClick={() => downloadReport()}
             title="Open a printable diagnostic report (save as PDF)."
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-teal-400/30 text-teal-300 bg-teal-400/10 hover:bg-teal-400/20 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-600 bg-indigo-400/10 hover:bg-indigo-400/20 transition-colors"
           >
             <FileDown className="w-3.5 h-3.5" /> Report
           </button>
@@ -308,16 +312,16 @@ export default function DashboardPage() {
           {fault && (
             <Card className="!p-3 flex items-center gap-2.5 border-rose-500/30 bg-rose-500/5" title="The fusion layer matched this failure signature.">
               <ShieldAlert className="w-4 h-4 text-rose-400" />
-              <span className="text-sm text-rose-200">
+              <span className="text-sm text-rose-700">
                 Identified fault: <b className="font-semibold">{fault}</b>
-                {faultConf ? <span className="text-rose-300/70"> · {Math.round(faultConf * 100)}% confidence</span> : null}
+                {faultConf ? <span className="text-rose-700/70"> · {Math.round(faultConf * 100)}% confidence</span> : null}
               </span>
             </Card>
           )}
           {drift && (
             <Card className="!p-3 flex items-center gap-2.5 border-amber-500/30 bg-amber-500/5" title="The normal operating range is slowly shifting over time.">
               <Radio className="w-4 h-4 text-amber-400" />
-              <span className="text-sm text-amber-200">Concept drift — operating range shifting</span>
+              <span className="text-sm text-amber-700">Concept drift — operating range shifting</span>
             </Card>
           )}
         </div>
@@ -377,7 +381,7 @@ export default function DashboardPage() {
           <CardTitle
             icon={Thermometer}
             right={
-              <div className="flex items-center gap-3 text-[11px] text-slate-500">
+              <div className="flex items-center gap-3 text-[11px] text-[var(--text-dim)]">
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 rounded" style={{ background: CHART.temp }} /> Now</span>
                 <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 rounded" style={{ background: CHART.forecast }} /> Forecast</span>
                 {fcTraj && <span className="flex items-center gap-1.5"><span className="w-2.5 h-0.5 rounded" style={{ background: CHART.indigo }} /> Projection +{fcTraj.length}s</span>}
@@ -391,7 +395,8 @@ export default function DashboardPage() {
               <LineChart data={tempChartData} margin={{ top: 6, right: 12, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="tempFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={CHART.temp} stopOpacity={0.18} />
+                    <stop offset="0%" stopColor={CHART.temp} stopOpacity={0.38} />
+                    <stop offset="55%" stopColor={CHART.temp} stopOpacity={0.12} />
                     <stop offset="100%" stopColor={CHART.temp} stopOpacity={0} />
                   </linearGradient>
                 </defs>
@@ -404,7 +409,7 @@ export default function DashboardPage() {
                 {/* P2.1: p10 / p90 uncertainty band as two faint dotted bounds (keeps axis tight) */}
                 <Line type="monotone" dataKey="bandHi" name="p90" stroke={CHART.indigo} strokeWidth={1} strokeOpacity={0.4} strokeDasharray="1 3" dot={false} isAnimationActive={false} connectNulls legendType="none" />
                 <Line type="monotone" dataKey="bandLo" name="p10" stroke={CHART.indigo} strokeWidth={1} strokeOpacity={0.4} strokeDasharray="1 3" dot={false} isAnimationActive={false} connectNulls legendType="none" />
-                <Area type="monotone" dataKey="current_temp" name="Now (°C)" stroke={CHART.temp} strokeWidth={2.2} fill="url(#tempFill)" dot={false} isAnimationActive={false} connectNulls={false} />
+                <Area type="monotone" dataKey="current_temp" name="Now (°C)" stroke={CHART.temp} strokeWidth={2.8} fill="url(#tempFill)" dot={false} isAnimationActive={false} connectNulls={false} style={{ filter: `drop-shadow(0 0 6px ${CHART.temp}aa)` }} />
                 <Line type="monotone" dataKey="lstm_prediction" name="Forecast (°C)" stroke={CHART.forecast} strokeWidth={1.6} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
                 <Line type="monotone" dataKey="projection" name="Projection (°C)" stroke={CHART.indigo} strokeWidth={1.8} strokeDasharray="2 3" dot={false} isAnimationActive={false} connectNulls />
               </LineChart>
@@ -414,17 +419,19 @@ export default function DashboardPage() {
 
         {/* Live vitals (system_health components — real per-component values) */}
         <Card className="col-span-12 lg:col-span-4">
-          <CardTitle icon={Gauge} right={<span className="metric text-xs" style={{ color: hColor }}>{health != null ? Math.round(health) : "--"}/100</span>}>
-            Live Vitals
-          </CardTitle>
+          <CardTitle icon={Gauge}>Live Vitals</CardTitle>
+          <div className="flex flex-col items-center mb-4">
+            <RadialGauge value={health ?? 0} color={hColor} size={150} sub={healthLabel(health)} />
+            <div className="text-[11px] text-[var(--text-muted)] mt-1">Composite health · {meta.health_trend || "stable"}</div>
+          </div>
           <div className="space-y-2.5">
             {(sh?.components || []).slice(0, 5).map((c) => (
               <div key={c.name} className="flex items-center gap-2.5" title={c.verdict}>
                 <span className="text-base w-5 text-center">{c.icon}</span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-300">{c.name}</span>
-                    <span className="metric text-xs text-slate-100">{c.val}</span>
+                    <span className="text-xs text-[var(--text)]">{c.name}</span>
+                    <span className="metric text-xs text-[var(--text)]">{c.val}</span>
                   </div>
                   <div className="text-[10px]" style={{ color: statusColor(c.status) }}>{c.verdict}</div>
                 </div>
@@ -441,7 +448,7 @@ export default function DashboardPage() {
           <CardTitle
             icon={Activity}
             right={
-              <div className="flex flex-wrap gap-2.5 text-[10px] text-slate-500">
+              <div className="flex flex-wrap gap-2.5 text-[10px] text-[var(--text-dim)]">
                 <span style={{ color: CHART.cyan }}>● Odd</span>
                 <span style={{ color: CHART.good }}>● Trend</span>
                 <span style={{ color: CHART.amber }}>● Pattern</span>
@@ -456,8 +463,8 @@ export default function DashboardPage() {
                 · P(fault) {(detectorP * 100).toFixed(0)}%
               </span>
             )}
-            {detectorGated && <span className="ml-2 text-[11px] text-slate-500">· detector calibrated for simulation</span>}
-            {foundationOn && <span className="ml-2 text-[11px] text-indigo-300/80">· zero-shot foundation detector</span>}
+            {detectorGated && <span className="ml-2 text-[11px] text-[var(--text-dim)]">· detector calibrated for simulation</span>}
+            {foundationOn && <span className="ml-2 text-[11px] text-indigo-600/80">· zero-shot foundation detector</span>}
           </CardTitle>
           <div className="h-[230px]">
             <ResponsiveContainer width="100%" height="100%">
@@ -491,20 +498,20 @@ export default function DashboardPage() {
               return (
                 <div key={r.key} className="flex items-center gap-3" title={`${r.meaning} — ${r.model}`}>
                   <div className="w-28 shrink-0">
-                    <div className="text-xs text-slate-300">{r.label}</div>
-                    <div className="text-[10px] text-slate-600">{r.meaning}</div>
+                    <div className="text-xs text-[var(--text)]">{r.label}</div>
+                    <div className="text-[10px] text-[var(--text-muted)]">{r.meaning}</div>
                   </div>
-                  <div className="flex-1"><Progress value={v} color={active ? "#22d3ee" : "#475569"} /></div>
-                  <span className="metric text-xs w-9 text-right" style={{ color: active ? "#22d3ee" : "#5d6b82" }}>{v}%</span>
+                  <div className="flex-1"><Progress value={v} color={active ? "#0ea5e9" : "#475569"} /></div>
+                  <span className="metric text-xs w-9 text-right" style={{ color: active ? "#0ea5e9" : "#8b91a1" }}>{v}%</span>
                 </div>
               );
             })}
           </div>
-          <p className="text-[11px] text-slate-500 mt-4 pt-3 border-t border-white/[0.06]">
+          <p className="text-[11px] text-[var(--text-dim)] mt-4 pt-3 border-t border-[var(--border)]">
             {topRow ? (
               <><span className="text-cyan-400 font-medium">Main reason:</span> {topRow.label} — {topRow.meaning.toLowerCase()}</>
             ) : (
-              <span className="text-slate-600">No single cause — system looks normal.</span>
+              <span className="text-[var(--text-muted)]">No single cause — system looks normal.</span>
             )}
           </p>
         </Card>
@@ -522,9 +529,9 @@ export default function DashboardPage() {
                   {maint.urgency_level?.toUpperCase()}
                 </span>
               </div>
-              <p className="text-[13px] text-slate-400 leading-relaxed">{maint.action}</p>
+              <p className="text-[13px] text-[var(--text-dim)] leading-relaxed">{maint.action}</p>
               {maint.window_start && (
-                <p className="text-[11px] text-slate-500">
+                <p className="text-[11px] text-[var(--text-dim)]">
                   Window: {new Date(maint.window_start).toLocaleString()} → {maint.window_end ? new Date(maint.window_end).toLocaleString() : "—"}
                 </p>
               )}
@@ -536,7 +543,7 @@ export default function DashboardPage() {
 
         <Card className="col-span-12 lg:col-span-7">
           <CardTitle icon={ShieldAlert}>Test Panel · Inject a Fault</CardTitle>
-          <p className="text-[11px] text-slate-500 mb-3">
+          <p className="text-[11px] text-[var(--text-dim)] mb-3">
             {can("inject") ? "Click to simulate a fault and watch the AI react." : "Read-only — sign in as operator to use."}
           </p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -546,7 +553,7 @@ export default function DashboardPage() {
                 onClick={() => injectAnomaly(b.type)}
                 disabled={!can("inject")}
                 title={b.tip}
-                className="flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed hover:bg-white/[0.04] hover:-translate-y-0.5"
+                className="flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--surface-hover)] hover:-translate-y-0.5"
                 style={{ borderColor: `${b.color}40`, color: b.color }}
               >
                 <b.icon className="w-3.5 h-3.5 shrink-0" /> {b.label}
@@ -556,7 +563,7 @@ export default function DashboardPage() {
               onClick={resetSystem}
               disabled={!can("inject")}
               title="Clear all injected faults and return to idle."
-              className="flex items-center gap-2 rounded-xl border border-white/[0.1] text-slate-400 px-3 py-2.5 text-xs font-medium hover:bg-white/[0.04] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 rounded-xl border border-[var(--border)] text-[var(--text-dim)] px-3 py-2.5 text-xs font-medium hover:bg-[var(--surface-hover)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <RotateCcw className="w-3.5 h-3.5 shrink-0" /> Reset
             </button>
@@ -568,20 +575,20 @@ export default function DashboardPage() {
       <Card>
         <CardTitle icon={Bell}>Event Log</CardTitle>
         <div className="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
-          {alarms.length === 0 && <p className="text-sm text-slate-600 py-2">No active alarms — all clear.</p>}
+          {alarms.length === 0 && <p className="text-sm text-[var(--text-muted)] py-2">No active alarms — all clear.</p>}
           {alarms.map((a) => {
             const ackd = acked.has(a.id);
-            const col = a.sev === "critical" ? "#f87171" : "#fbbf24";
+            const col = a.sev === "critical" ? "#ef4444" : "#f59e0b";
             return (
-              <div key={a.id} className="flex items-center gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2">
-                <span className="metric text-[11px] text-slate-500 w-16 shrink-0">{a.time}</span>
+              <div key={a.id} className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2">
+                <span className="metric text-[11px] text-[var(--text-dim)] w-16 shrink-0">{a.time}</span>
                 <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ background: ackd ? "#475569" : col }} />
-                <span className={`text-xs flex-1 truncate ${ackd ? "text-slate-600 line-through" : "text-slate-300"}`}>{a.msg}</span>
+                <span className={`text-xs flex-1 truncate ${ackd ? "text-[var(--text-muted)] line-through" : "text-[var(--text)]"}`}>{a.msg}</span>
                 {!ackd && (
                   <button
                     onClick={() => setAcked((s) => new Set(s).add(a.id))}
                     title="Acknowledge"
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-white/[0.1] text-slate-400 hover:text-cyan-300 hover:border-cyan-500/40"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-[var(--border)] text-[var(--text-dim)] hover:text-sky-700 hover:border-cyan-500/40"
                   >
                     <Check className="w-3 h-3" /> Ack
                   </button>
@@ -597,13 +604,13 @@ export default function DashboardPage() {
         <CardTitle icon={Activity} right={latest?.llm_source ? <Badge tone="indigo">{latest.llm_source}</Badge> : undefined}>
           AI Assistant — Plain-Language Alert
         </CardTitle>
-        <div className="rounded-xl bg-black/30 border border-white/[0.06] p-4 font-mono text-[13px] leading-relaxed min-h-[60px]">
+        <div className="rounded-xl bg-black/30 border border-[var(--border)] p-4 font-mono text-[13px] leading-relaxed min-h-[60px]">
           {latest ? (
-            <span className={latest.urgency > 0.6 ? "text-rose-300" : "text-emerald-300"}>
-              <span className="text-slate-600">$ </span>{latest.alert}
+            <span className={latest.urgency > 0.6 ? "text-rose-700" : "text-emerald-700"}>
+              <span className="text-[var(--text-muted)]">$ </span>{latest.alert}
             </span>
           ) : (
-            <span className="text-slate-600">awaiting telemetry sequence…</span>
+            <span className="text-[var(--text-muted)]">awaiting telemetry sequence…</span>
           )}
         </div>
       </Card>

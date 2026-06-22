@@ -10,21 +10,30 @@ class HealthScoreEngine:
         self.profile = machine_profile
         self._history = []
         
-    def compute(self, current_temp: float, anomaly_score: float, 
-                rul_minutes: float, vib_score: float, drift_detected: bool) -> Dict[str, Any]:
+    def compute(self, current_temp: float, anomaly_score: float,
+                rul_minutes: float, vib_score: float, drift_detected: bool,
+                live_mode: bool = False) -> Dict[str, Any]:
         """
         Calculate the overall health score and per-component breakdown.
-        
+
         Args:
             current_temp: Current temperature in Celsius.
             anomaly_score: Autoencoder reconstruction error score [0, 1].
             rul_minutes: Remaining useful life in minutes (or None if stable).
             vib_score: Vibration anomaly score [0, 1].
             drift_detected: Boolean flag for concept drift.
-            
+            live_mode: True when serving real host telemetry. The detector models
+                are trained on the synthetic distribution, so their anomaly score
+                saturates on out-of-distribution live data. Clamp its influence so
+                health reflects the real thermal/mechanical state, not OOD error.
+
         Returns:
             Dict containing 'score' (0-100), 'trend', and 'breakdown' (sub-scores).
         """
+        # OOD guard: cap the anomaly modulation in live mode (sim-trained AE
+        # saturates on host data → would otherwise crush an otherwise healthy score).
+        if live_mode:
+            anomaly_score = min(anomaly_score, 0.15)
         # 1. Thermal Health (0-100)
         # Based on proximity to safe_max and critical thresholds
         safe_max = self.profile["safe_max"]
