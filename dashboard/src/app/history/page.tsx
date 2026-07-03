@@ -98,13 +98,13 @@ export default function HistoryPage() {
         <div className="flex gap-2 mb-4">
           <button
             onClick={() => setActiveTab("actions")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "actions" ? "bg-indigo-400/10 text-indigo-600 border border-indigo-400/30" : "text-[var(--text-dim)] hover:text-[var(--text)] border border-transparent"}`}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "actions" ? "bg-indigo-400/10 text-indigo-600 dark:text-indigo-300 border border-indigo-400/30" : "text-[var(--text-dim)] hover:text-[var(--text)] border border-transparent"}`}
           >
             <Clock className="w-4 h-4 inline mr-2" /> Action Timeline ({actions.length})
           </button>
           <button
             onClick={() => setActiveTab("alerts")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "alerts" ? "bg-indigo-400/10 text-indigo-600 border border-indigo-400/30" : "text-[var(--text-dim)] hover:text-[var(--text)] border border-transparent"}`}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${activeTab === "alerts" ? "bg-indigo-400/10 text-indigo-600 dark:text-indigo-300 border border-indigo-400/30" : "text-[var(--text-dim)] hover:text-[var(--text)] border border-transparent"}`}
           >
             <AlertTriangle className="w-4 h-4 inline mr-2" /> Alert Log ({alerts.length})
           </button>
@@ -137,7 +137,7 @@ export default function HistoryPage() {
                           <span className="metric text-xs text-[var(--text-dim)]">{entry.urgency.toFixed(3)}</span>
                         </div>
                       </td>
-                      <td className="px-5 py-3"><span className={`text-xs font-semibold uppercase ${entry.route === "edge" ? "text-sky-700" : entry.route === "cloud" ? "text-blue-700" : "text-indigo-600"}`}>{entry.route}</span></td>
+                      <td className="px-5 py-3"><span className={`text-xs font-semibold uppercase ${entry.route === "edge" ? "text-sky-700 dark:text-sky-300" : entry.route === "cloud" ? "text-blue-700 dark:text-blue-300" : "text-indigo-600 dark:text-indigo-300"}`}>{entry.route}</span></td>
                       <td className="px-5 py-3 metric text-xs text-[var(--text)]">{entry.temp.toFixed(1)}°C</td>
                       <td className="px-5 py-3 text-right metric text-xs text-[var(--text-dim)]">{entry.latency_ms.toFixed(1)}ms</td>
                     </tr>

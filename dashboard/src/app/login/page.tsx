@@ -50,7 +50,7 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {error && <div className="text-xs text-rose-700 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">{error}</div>}
+          {error && <div className="text-xs text-rose-700 dark:text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-lg px-3 py-2">{error}</div>}
 
           <button type="submit" disabled={busy} className="btn-accent w-full flex items-center justify-center gap-2 font-semibold rounded-lg py-2.5 text-sm disabled:opacity-50">
             <LogIn className="w-4 h-4" /> {busy ? "Authenticating…" : "Sign In"}

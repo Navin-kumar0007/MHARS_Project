@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTelemetry } from "@/components/TelemetryProvider";
 import { healthColor, healthLabel } from "@/components/ui";
+import { ThemeToggle } from "@/components/theme";
 import {
   LayoutDashboard,
   GitBranch,
@@ -56,19 +57,22 @@ export default function Sidebar() {
   const hColor = healthColor(health);
 
   return (
-    <aside className="fixed left-0 top-0 h-screen w-64 flex flex-col z-50 bg-[var(--surface)] backdrop-blur-xl border-r border-[var(--border)]">
+    <aside className="fixed left-0 top-0 h-screen w-64 flex flex-col z-50 glass-panel border-r border-[var(--border)]">
       {/* Logo */}
       <div className="px-5 py-5">
-        <div className="flex items-center gap-2.5">
-          <div className="grid place-items-center w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-600 border border-indigo-400/40 shadow-[0_6px_16px_-6px_rgba(94,106,210,0.7)]">
-            <ChevronsLeftRightEllipsis className="w-5 h-5 text-white" />
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="grid place-items-center w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-600 border border-indigo-400/40 shadow-[0_6px_16px_-6px_rgba(94,106,210,0.7)] shrink-0">
+              <ChevronsLeftRightEllipsis className="w-5 h-5 text-white" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-lg font-bold text-gradient tracking-tight">
+                MHARS
+              </span>
+              <p className="text-[10px] text-[var(--text-muted)] -mt-0.5 tracking-wider">DIGITAL TWIN · v2</p>
+            </div>
           </div>
-          <div>
-            <span className="text-lg font-bold text-gradient tracking-tight">
-              MHARS
-            </span>
-            <p className="text-[10px] text-[var(--text-muted)] -mt-0.5 tracking-wider">DIGITAL TWIN · v2</p>
-          </div>
+          <ThemeToggle />
         </div>
       </div>
 
@@ -122,7 +126,7 @@ export default function Sidebar() {
                     setMachineOpen(false);
                   }}
                   className={`w-full text-left px-3 py-2 text-sm transition-colors ${
-                    active ? "bg-indigo-400/10 text-indigo-600" : "text-[var(--text-dim)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+                    active ? "bg-indigo-400/10 text-indigo-600 dark:text-indigo-300" : "text-[var(--text-dim)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
                   }`}
                 >
                   {name as string}
@@ -144,12 +148,12 @@ export default function Sidebar() {
               href={item.href}
               className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                 isActive
-                  ? "text-indigo-700 bg-indigo-50 border border-indigo-100"
-                  : "text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] border border-transparent"
+                  ? "text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-400/10 border border-indigo-100 dark:border-indigo-400/20 shadow-[0_4px_16px_-8px_var(--accent-glow)]"
+                  : "text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-hover)] border border-transparent hover:translate-x-0.5"
               }`}
             >
-              {isActive && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-indigo-500" />}
-              <item.icon className="w-4 h-4" />
+              {isActive && <span className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-indigo-500 shadow-[0_0_10px_-1px_var(--accent)]" />}
+              <item.icon className={`w-4 h-4 transition-transform ${isActive ? "scale-110" : "group-hover:scale-110"}`} />
               {item.label}
             </Link>
           );
@@ -169,7 +173,7 @@ export default function Sidebar() {
             <button
               onClick={() => { if (liveMode) toggleMode(); }}
               className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                !liveMode ? "bg-blue-500/20 text-blue-700" : "text-[var(--text-dim)] hover:text-[var(--text)]"
+                !liveMode ? "bg-blue-500/20 text-blue-700 dark:text-blue-300" : "text-[var(--text-dim)] hover:text-[var(--text)]"
               }`}
             >
               <Radio className="w-3.5 h-3.5" /> Demo
@@ -177,7 +181,7 @@ export default function Sidebar() {
             <button
               onClick={() => { if (!liveMode) toggleMode(); }}
               className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                liveMode ? "bg-rose-500/20 text-rose-700" : "text-[var(--text-dim)] hover:text-[var(--text)]"
+                liveMode ? "bg-rose-500/20 text-rose-700 dark:text-rose-300" : "text-[var(--text-dim)] hover:text-[var(--text)]"
               }`}
             >
               <Cpu className="w-3.5 h-3.5" /> Live
@@ -185,7 +189,7 @@ export default function Sidebar() {
           </div>
         ) : (
           <div className={`flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-xs font-semibold border ${
-            liveMode ? "bg-rose-500/10 text-rose-700 border-rose-500/30" : "bg-blue-500/10 text-blue-700 border-blue-500/30"
+            liveMode ? "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30" : "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30"
           }`}>
             {liveMode ? <Cpu className="w-3.5 h-3.5" /> : <Radio className="w-3.5 h-3.5" />}
             {liveMode ? "Live" : "Demo"} <span className="text-[var(--text-muted)] font-normal">· operator only</span>
@@ -207,7 +211,7 @@ export default function Sidebar() {
         {isAuthenticated ? (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="grid place-items-center w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400/30 to-indigo-500/30 text-indigo-700 text-xs font-bold shrink-0">
+              <div className="grid place-items-center w-8 h-8 rounded-full bg-gradient-to-br from-indigo-400/30 to-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold shrink-0">
                 {user?.username?.[0]?.toUpperCase() || "?"}
               </div>
               <div className="min-w-0">
@@ -229,7 +233,7 @@ export default function Sidebar() {
         ) : (
           <Link
             href="/login"
-            className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-indigo-600 bg-indigo-400/10 border border-indigo-400/30 hover:bg-indigo-400/20 transition-colors"
+            className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-indigo-600 dark:text-indigo-300 bg-indigo-400/10 border border-indigo-400/30 hover:bg-indigo-400/20 transition-colors"
           >
             <LogIn className="w-3.5 h-3.5" />
             Sign In

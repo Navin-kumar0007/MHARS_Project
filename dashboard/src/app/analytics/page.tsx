@@ -19,7 +19,7 @@ import {
   Cell,
 } from "recharts";
 import { BarChart3, HeartPulse, Timer, Layers, TrendingUp, Sigma } from "lucide-react";
-import { Card, CardTitle, PageHeader, Awaiting, CHART, tooltipStyle, tooltipLabelStyle, healthColor } from "@/components/ui";
+import { Card, CardTitle, PageHeader, Awaiting, CHART, tooltipStyle, tooltipLabelStyle, healthColor, mix } from "@/components/ui";
 
 function timeLabel(ts: number) {
   return new Date(ts * 1000).toLocaleTimeString([], { hour12: false, minute: "2-digit", second: "2-digit" });
@@ -37,7 +37,7 @@ function HealthRing({ score }: { score: number }) {
         <circle
           cx="70" cy="70" r={r} fill="none" stroke={color} strokeWidth="12" strokeLinecap="round"
           strokeDasharray={c} strokeDashoffset={c * (1 - pct)}
-          style={{ transition: "stroke-dashoffset 0.6s ease, stroke 0.6s ease", filter: `drop-shadow(0 0 6px ${color}80)` }}
+          style={{ transition: "stroke-dashoffset 0.6s ease, stroke 0.6s ease", filter: `drop-shadow(0 0 6px ${mix(color, 50)})` }}
         />
       </svg>
       <div className="absolute flex flex-col items-center">
@@ -130,7 +130,7 @@ export default function AnalyticsPage() {
               <div className="flex-1 flex items-center justify-center gap-4">
                 {[{ v: rt.d, l: "days" }, { v: rt.h, l: "hrs" }, { v: rt.m, l: "min" }].map((b) => (
                   <div key={b.l} className="text-center">
-                    <div className="metric text-4xl text-indigo-600">{b.v}</div>
+                    <div className="metric text-4xl text-indigo-600 dark:text-indigo-300">{b.v}</div>
                     <div className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider mt-1">{b.l}</div>
                   </div>
                 ))}

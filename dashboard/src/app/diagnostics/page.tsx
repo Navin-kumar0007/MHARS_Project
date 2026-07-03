@@ -105,7 +105,7 @@ export default function DiagnosticsPage() {
             <button
               onClick={runDiagnose}
               disabled={diagBusy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-700 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-700 dark:text-indigo-300 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50 transition-colors"
             >
               <Stethoscope className="w-3.5 h-3.5" /> {diagBusy ? "Diagnosing…" : "Run diagnosis"}
             </button>
@@ -115,7 +115,7 @@ export default function DiagnosticsPage() {
         </CardTitle>
         {!diag ? (
           <p className="text-sm text-[var(--text-dim)]">
-            Runs an agent that retrieves maintenance manuals, simulates each action on the digital twin, and reasons about root cause — grounded, with citations. Click <span className="text-indigo-600">Run diagnosis</span>.
+            Runs an agent that retrieves maintenance manuals, simulates each action on the digital twin, and reasons about root cause — grounded, with citations. Click <span className="text-indigo-600 dark:text-indigo-300">Run diagnosis</span>.
           </p>
         ) : (
           <div className="space-y-4">
@@ -127,7 +127,7 @@ export default function DiagnosticsPage() {
             <p className="text-[13px] text-[var(--text)] leading-relaxed bg-[var(--surface-3)] border border-[var(--border)] rounded-xl p-3">{diag.narrative}</p>
             {diag.counterfactual && (
               <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
-                <FlaskConical className="w-4 h-4 text-amber-700 mt-0.5 shrink-0" />
+                <FlaskConical className="w-4 h-4 text-amber-700 dark:text-amber-300 mt-0.5 shrink-0" />
                 <div>
                   <div className="eyebrow text-amber-700/80">Counterfactual — what the action changes</div>
                   <p className="text-[13px] text-[var(--text)] mt-0.5">{diag.counterfactual.text}</p>
@@ -176,7 +176,7 @@ export default function DiagnosticsPage() {
                 <div className="space-y-1.5">
                   {diag.citations.map((c) => (
                     <div key={c.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-1.5">
-                      <div className="flex items-center gap-2"><span className="metric text-[10px] text-indigo-600">{c.id}</span><span className="text-xs text-[var(--text)]">{c.title}</span></div>
+                      <div className="flex items-center gap-2"><span className="metric text-[10px] text-indigo-600 dark:text-indigo-300">{c.id}</span><span className="text-xs text-[var(--text)]">{c.title}</span></div>
                     </div>
                   ))}
                 </div>
@@ -199,7 +199,7 @@ export default function DiagnosticsPage() {
           <div className="metric text-2xl mt-1" style={{ color: shield?.active ? CHART.bad : CHART.good }}>{shield?.active ? "Engaged" : "Standby"}</div>
           <div className="text-[11px] text-[var(--text-dim)] mt-0.5">{shield?.active ? `→ ${shield.shielded}` : `worst-case ${shield?.worst_case_c ?? "--"}°C`}</div>
         </Card>
-        <Card hover><div className="eyebrow">Inference Latency (avg)</div><div className="metric text-2xl mt-1 text-indigo-600">{latency.avg}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">min {latency.min} · max {latency.max}</div></Card>
+        <Card hover><div className="eyebrow">Inference Latency (avg)</div><div className="metric text-2xl mt-1 text-indigo-600 dark:text-indigo-300">{latency.avg}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">min {latency.min} · max {latency.max}</div></Card>
         <Card hover><div className="eyebrow">Telemetry</div><div className="metric text-2xl mt-1" style={{ color: isConnected ? CHART.good : CHART.bad }}>{isConnected ? "Live" : "Down"}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">{history.length} samples buffered</div></Card>
         <Card hover><div className="eyebrow">Detector P(fault)</div><div className="metric text-2xl mt-1" style={{ color: detP != null && detP > 0.5 ? CHART.bad : CHART.good }}>{detP != null ? `${(detP * 100).toFixed(0)}%` : "--"}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">supervised classifier</div></Card>
         <Card hover><div className="eyebrow">Active Machine</div><div className="metric text-2xl mt-1 text-[var(--text)]">{latest?.machine_type || "—"}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">{latest?.live_mode ? "live hardware" : "simulation"}</div></Card>
@@ -252,7 +252,7 @@ export default function DiagnosticsPage() {
                 <button
                   onClick={adaptNow}
                   disabled={adaptBusy}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-indigo-400/30 text-indigo-700 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-indigo-400/30 text-indigo-700 dark:text-indigo-300 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50"
                 >
                   {adaptBusy ? "Adapting…" : "Adapt now (label-free)"}
                 </button>

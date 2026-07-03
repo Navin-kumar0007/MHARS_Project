@@ -1,59 +1,166 @@
 @import "tailwindcss";
 
+/* Dark mode driven by an explicit `.dark` class on <html> (toggle + no-flash script). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ──────────────────────────────────────────────────────────────────────
-   MHARS — Light Command-Center design system
-   Premium light SaaS (Linear/Vercel light): neutral canvas, white panels,
-   soft layered shadows, single indigo accent, crisp data viz.
+   MHARS — Adaptive Command-Center design system
+   One token surface, two themes:
+     · Light  → premium neutral SaaS (Linear/Vercel light)
+     · Dark   → OLED-grade operations command center (mission-control)
+   Every surface, text, border, accent, status + chart color is a token.
+   Pages consume tokens only → theme flips with zero markup churn.
    ────────────────────────────────────────────────────────────────────── */
+
 :root {
   --font-inter: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  /* Canvas + surfaces */
-  --bg: #f6f7f9;
-  --bg-2: #eef0f4;
+  /* ── Canvas + surfaces ─────────────────────────────────────────────── */
+  --bg: #f5f6f9;
+  --bg-2: #eceef3;
   --surface: #ffffff;
   --surface-2: #fbfcfd;
-  --surface-3: #f3f4f7;
-  --surface-hover: #f8f9fb;
-  --border: #e7e9ee;
-  --border-strong: #d8dbe3;
+  --surface-3: #f2f4f7;
+  --surface-hover: #f7f8fb;
+  --border: #e6e8ee;
+  --border-strong: #d5d9e2;
 
-  /* Text — near-black ramp on light */
-  --text: #0c0e14;
-  --text-dim: #565d6e;
-  --text-muted: #8b91a1;
+  /* ── Text ramp ─────────────────────────────────────────────────────── */
+  --text: #0b0d13;
+  --text-dim: #545b6d;
+  --text-muted: #878da0;
 
-  /* Accent — Linear indigo */
+  /* ── Accent — indigo primary + cyan data secondary ─────────────────── */
   --accent: #5e6ad2;
   --accent-hi: #6e79e0;
   --accent-2: #7c8aff;
   --accent-soft: rgba(94, 106, 210, 0.10);
   --accent-glow: rgba(94, 106, 210, 0.22);
 
-  /* Status — tuned for contrast on white */
-  --good: #10b981;
-  --warn: #f59e0b;
-  --bad: #ef4444;
+  /* ── Status ────────────────────────────────────────────────────────── */
+  --good: #059669;
+  --warn: #d97706;
+  --bad: #e11d48;
   --crit: #dc2626;
-  --info: #0ea5e9;
+  --info: #0284c7;
 
-  /* Soft layered elevation (Linear/Vercel) */
+  /* Status soft fills (tinted chips/cards) — light */
+  --good-bg: rgba(5, 150, 105, 0.09);
+  --warn-bg: rgba(217, 119, 6, 0.09);
+  --bad-bg: rgba(225, 29, 72, 0.09);
+  --info-bg: rgba(2, 132, 199, 0.09);
+  --accent-bg: rgba(94, 106, 210, 0.09);
+
+  /* ── Chart palette (SVG resolves var() live → charts recolor on toggle) */
+  --chart-grid: rgba(16, 24, 40, 0.07);
+  --chart-axis: #98a0b0;
+  --chart-temp: #e11d48;
+  --chart-forecast: #0284c7;
+  --chart-good: #059669;
+  --chart-warn: #d97706;
+  --chart-bad: #e11d48;
+  --chart-crit: #dc2626;
+  --chart-accent: #5e6ad2;
+  --chart-cyan: #0891b2;
+  --chart-indigo: #5e6ad2;
+  --chart-amber: #d97706;
+  --chart-fuchsia: #c026d3;
+  --chart-combined: #475569;
+  --chart-tooltip-bg: #ffffff;
+  --chart-tooltip-border: #e6e8ee;
+  --chart-tooltip-shadow: 0 8px 28px -8px rgba(16, 24, 40, 0.22);
+  --chart-radial-track: #eef0f4;
+
+  /* ── Elevation — soft layered (light) ──────────────────────────────── */
   --sh-1: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.06);
   --sh-2: 0 2px 4px -1px rgba(16, 24, 40, 0.06), 0 6px 16px -4px rgba(16, 24, 40, 0.10);
   --sh-3: 0 4px 8px -2px rgba(16, 24, 40, 0.08), 0 16px 36px -8px rgba(16, 24, 40, 0.16);
 
+  /* ── Ambient wash (barely-there accent bloom top corners) ──────────── */
+  --wash: radial-gradient(1100px 700px at 8% -12%, rgba(94, 106, 210, 0.06), transparent 60%),
+          radial-gradient(900px 640px at 104% -6%, rgba(124, 138, 255, 0.05), transparent 58%),
+          var(--bg);
+
   --radius: 16px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  color-scheme: light;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   DARK — OLED command center
+   ══════════════════════════════════════════════════════════════════════ */
+.dark {
+  --bg: #070a10;
+  --bg-2: #0b0f17;
+  --surface: #0e131d;
+  --surface-2: #111725;
+  --surface-3: #161d2b;
+  --surface-hover: #18202f;
+  --border: #1e2637;
+  --border-strong: #2b3549;
+
+  --text: #eef1f7;
+  --text-dim: #9aa3b6;
+  --text-muted: #6b7488;
+
+  --accent: #7c8aff;
+  --accent-hi: #8f9bff;
+  --accent-2: #a5b0ff;
+  --accent-soft: rgba(124, 138, 255, 0.14);
+  --accent-glow: rgba(124, 138, 255, 0.40);
+
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #fb7185;
+  --crit: #f87171;
+  --info: #38bdf8;
+
+  --good-bg: rgba(52, 211, 153, 0.14);
+  --warn-bg: rgba(251, 191, 36, 0.14);
+  --bad-bg: rgba(251, 113, 133, 0.14);
+  --info-bg: rgba(56, 189, 248, 0.14);
+  --accent-bg: rgba(124, 138, 255, 0.16);
+
+  --chart-grid: rgba(148, 163, 184, 0.10);
+  --chart-axis: #5c6577;
+  --chart-temp: #fb7185;
+  --chart-forecast: #38bdf8;
+  --chart-good: #34d399;
+  --chart-warn: #fbbf24;
+  --chart-bad: #fb7185;
+  --chart-crit: #f87171;
+  --chart-accent: #7c8aff;
+  --chart-cyan: #22d3ee;
+  --chart-indigo: #7c8aff;
+  --chart-amber: #fbbf24;
+  --chart-fuchsia: #e879f9;
+  --chart-combined: #94a3b8;
+  --chart-tooltip-bg: #111725;
+  --chart-tooltip-border: #2b3549;
+  --chart-tooltip-shadow: 0 12px 34px -10px rgba(0, 0, 0, 0.75);
+  --chart-radial-track: #1a2233;
+
+  /* Deep shadows + subtle inner top-light for glass depth */
+  --sh-1: 0 1px 2px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --sh-2: 0 2px 6px -1px rgba(0, 0, 0, 0.55), 0 10px 26px -6px rgba(0, 0, 0, 0.6);
+  --sh-3: 0 6px 14px -3px rgba(0, 0, 0, 0.6), 0 24px 50px -12px rgba(0, 0, 0, 0.75);
+
+  --wash: radial-gradient(1200px 760px at 6% -14%, rgba(124, 138, 255, 0.10), transparent 60%),
+          radial-gradient(1000px 700px at 106% -8%, rgba(34, 211, 238, 0.06), transparent 58%),
+          var(--bg);
+
+  color-scheme: dark;
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
 }
 
-html,
-body {
+html, body {
   font-family: var(--font-inter);
   background-color: var(--bg);
   color: var(--text);
@@ -62,59 +169,114 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Subtle ambient wash — barely-there indigo tint top corners */
+/* No-flash: html.dark set by inline script before paint. Smooth token cross-fade. */
+html { transition: background-color 0.4s var(--ease); }
+body, .card, .panel-tint, aside, main { transition: background-color 0.4s var(--ease), border-color 0.4s var(--ease), color 0.4s var(--ease); }
+
+/* Ambient wash */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -2;
   pointer-events: none;
-  background:
-    radial-gradient(1100px 700px at 8% -12%, rgba(94, 106, 210, 0.06), transparent 60%),
-    radial-gradient(900px 640px at 104% -6%, rgba(124, 138, 255, 0.05), transparent 58%),
-    var(--bg);
+  background: var(--wash);
 }
+
+/* Command-center grid texture — barely-there, adds depth behind glass panels */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--text) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--text) 4%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(120% 90% at 50% -10%, #000 30%, transparent 78%);
+  -webkit-mask-image: radial-gradient(120% 90% at 50% -10%, #000 30%, transparent 78%);
+  opacity: 0.5;
+}
+.dark body::after { opacity: 0.7; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(16, 24, 40, 0.16); border-radius: 8px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(16, 24, 40, 0.28); }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text) 18%, transparent); border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--text) 30%, transparent); }
 
 button, a, input, select { transition: all 0.18s var(--ease); }
 
-.font-mono { font-family: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace; }
+/* ── Focus — visible keyboard ring (a11y, both themes) ─────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.font-mono { font-family: var(--font-mono); }
 .tnum { font-variant-numeric: tabular-nums; }
 
-/* ── Card ─────────────────────────────────────────────────────────────── */
+/* ── Card — frosted glass panel w/ top sheen hairline ─────────────────── */
 .card {
   position: relative;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--sh-1);
 }
+/* Top-edge light sheen — reads as glass catching light (stronger in dark) */
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(180deg, color-mix(in srgb, #fff 8%, transparent), transparent 34%);
+  opacity: 0.35;
+}
+.dark .card::after { background: linear-gradient(180deg, color-mix(in srgb, #fff 12%, transparent), transparent 30%); opacity: 0.5; }
+.card > * { position: relative; z-index: 1; }
+
 .card-hover { transition: border-color 0.22s var(--ease), transform 0.22s var(--ease), box-shadow 0.22s var(--ease); }
 .card-hover:hover {
-  border-color: var(--border-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--sh-3);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+  transform: translateY(-3px);
+  box-shadow: var(--sh-3), 0 0 0 1px var(--accent-soft), 0 18px 50px -20px var(--accent-glow);
 }
-/* Accent top border for emphasis cards */
+
+/* Animated accent bar — gradient sheen slides across the top edge */
 .card-accent::before {
   content: "";
   position: absolute;
   inset: 0 0 auto 0;
   height: 3px;
+  z-index: 2;
   border-radius: var(--radius) var(--radius) 0 0;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  background: linear-gradient(90deg, transparent, var(--accent) 20%, var(--accent-2) 50%, var(--accent) 80%, transparent);
+  background-size: 200% 100%;
+  animation: mh-sheen 4.5s var(--ease) infinite;
 }
+@keyframes mh-sheen { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .card-accent::before { animation: none; } }
+
 .card-glow { box-shadow: var(--sh-2), 0 0 0 1px var(--accent-soft); }
+.dark .card-glow { box-shadow: var(--sh-2), 0 0 0 1px var(--accent-soft), 0 0 44px -12px var(--accent-glow); }
 
 /* Tinted info panel */
 .panel-tint {
   background: linear-gradient(180deg, var(--surface-2), var(--surface));
   border: 1px solid var(--border);
+}
+
+/* Frosted glass side panel */
+.glass-panel {
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
 }
 
 /* ── Typographic helpers ──────────────────────────────────────────────── */
@@ -126,13 +288,13 @@ button, a, input, select { transition: all 0.18s var(--ease); }
   color: var(--text-muted);
 }
 .metric {
-  font-family: var(--font-mono), ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   letter-spacing: -0.015em;
 }
 .text-gradient {
-  background: linear-gradient(120deg, #0c0e14, #4b3fb5 120%);
+  background: linear-gradient(120deg, var(--text), var(--accent) 130%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -157,7 +319,7 @@ button, a, input, select { transition: all 0.18s var(--ease); }
   border: 1px solid rgba(0, 0, 0, 0.06);
   box-shadow: 0 6px 18px -8px var(--accent-glow);
 }
-.btn-accent:hover { filter: brightness(1.05); box-shadow: 0 8px 22px -8px var(--accent-glow); }
+.btn-accent:hover { filter: brightness(1.06); box-shadow: 0 8px 22px -8px var(--accent-glow); }
 
 /* ── Live pulse dot ───────────────────────────────────────────────────── */
 @keyframes mh-pulse {
@@ -172,16 +334,17 @@ button, a, input, select { transition: all 0.18s var(--ease); }
 /* Skeleton shimmer */
 @keyframes mh-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 .shimmer {
-  background: linear-gradient(90deg, #eef0f4 25%, #f6f7f9 50%, #eef0f4 75%);
+  background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-hover) 50%, var(--surface-3) 75%);
   background-size: 200% 100%;
   animation: mh-shimmer 1.6s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .pulse-dot, .fade-in, .shimmer { animation: none !important; }
+  html, body, .card, aside, main { transition: none !important; }
 }
 
-/* Recharts polish */
+/* ── Recharts polish ──────────────────────────────────────────────────── */
 .recharts-tooltip-wrapper { z-index: 100 !important; outline: none !important; }
 .recharts-default-tooltip { border-radius: 12px !important; }
 .recharts-cartesian-axis-tick-value { fill: var(--text-muted); }

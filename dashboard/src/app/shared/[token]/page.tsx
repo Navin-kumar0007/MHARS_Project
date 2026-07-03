@@ -54,7 +54,7 @@ export default function SharedViewPage() {
         <header className="flex items-center justify-between border-b border-[var(--border)] pb-4 mb-6">
           <div className="flex items-center gap-2.5">
             <div className="grid place-items-center w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-400/20 to-indigo-500/20 border border-indigo-400/30">
-              <ChevronsLeftRightEllipsis className="w-5 h-5 text-indigo-600" />
+              <ChevronsLeftRightEllipsis className="w-5 h-5 text-indigo-600 dark:text-indigo-300" />
             </div>
             <div>
               <h1 className="text-lg font-bold text-gradient tracking-tight">MHARS Status Report</h1>
@@ -65,7 +65,7 @@ export default function SharedViewPage() {
         </header>
 
         {error ? (
-          <Card className="flex items-center gap-2 border-rose-500/30 bg-rose-500/5 text-rose-700">
+          <Card className="flex items-center gap-2 border-rose-500/30 bg-rose-500/5 text-rose-700 dark:text-rose-300">
             <ShieldAlert className="w-5 h-5" /> {error}
           </Card>
         ) : !status ? (
@@ -103,7 +103,7 @@ export default function SharedViewPage() {
 
             <Card accent>
               <CardTitle icon={AlertTriangle}>Latest Alert</CardTitle>
-              <div className="bg-black/30 rounded-xl p-3 border border-[var(--border)] font-mono text-xs leading-relaxed text-[var(--text)]">
+              <div className="bg-[var(--surface-3)] dark:bg-black/40 rounded-xl p-3 border border-[var(--border)] font-mono text-xs leading-relaxed text-[var(--text)]">
                 {status.alert || "No alert."}
               </div>
             </Card>

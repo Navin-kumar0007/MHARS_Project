@@ -23,9 +23,9 @@ function timeLabel(ts: number) {
 }
 
 function scoreTone(score: number) {
-  if (score > 0.6) return { border: "border-rose-500/60", glow: "bg-rose-500/10", text: "text-rose-700" };
-  if (score > 0.3) return { border: "border-amber-500/60", glow: "bg-amber-500/10", text: "text-amber-700" };
-  return { border: "border-emerald-500/40", glow: "bg-emerald-500/5", text: "text-emerald-700" };
+  if (score > 0.6) return { border: "border-rose-500/60", glow: "bg-rose-500/10", text: "text-rose-700 dark:text-rose-300" };
+  if (score > 0.3) return { border: "border-amber-500/60", glow: "bg-amber-500/10", text: "text-amber-700 dark:text-amber-300" };
+  return { border: "border-emerald-500/40", glow: "bg-emerald-500/5", text: "text-emerald-700 dark:text-emerald-300" };
 }
 
 function Node({ label, sub, score }: { label: string; sub: string; score: number }) {
@@ -48,9 +48,9 @@ function PipelineFlow({ ifScore, lstmScore, aeScore, vibScore, contextScore, urg
   contextScore: number; urgency: number; action: string; route: string;
 }) {
   const ct = scoreTone(contextScore);
-  const routeColor = route === "edge" ? "border-cyan-500/50 bg-cyan-500/5 text-sky-700"
-    : route === "cloud" ? "border-blue-500/50 bg-blue-500/5 text-blue-700"
-    : "border-indigo-500/50 bg-indigo-500/5 text-indigo-600";
+  const routeColor = route === "edge" ? "border-cyan-500/50 bg-cyan-500/5 text-sky-700 dark:text-sky-300"
+    : route === "cloud" ? "border-blue-500/50 bg-blue-500/5 text-blue-700 dark:text-blue-300"
+    : "border-indigo-500/50 bg-indigo-500/5 text-indigo-600 dark:text-indigo-300";
   return (
     <div className="space-y-5">
       <div className="flex justify-center">
@@ -83,7 +83,7 @@ function PipelineFlow({ ifScore, lstmScore, aeScore, vibScore, contextScore, urg
         <div className="rounded-xl border border-indigo-500/50 bg-indigo-500/5 p-4 text-center">
           <div className="eyebrow mb-1">Reinforcement Learning</div>
           <div className="text-[13px] font-semibold text-[var(--text)] mb-2">PPO Agent</div>
-          <div className="metric text-lg text-indigo-600 uppercase">{action}</div>
+          <div className="metric text-lg text-indigo-600 dark:text-indigo-300 uppercase">{action}</div>
         </div>
         <div className={`rounded-xl border ${routeColor} p-4 text-center`}>
           <div className="eyebrow mb-1">Inference Path</div>

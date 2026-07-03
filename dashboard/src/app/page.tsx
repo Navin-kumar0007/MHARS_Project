@@ -119,7 +119,7 @@ function KpiTile({ icon: Icon, label, value, tip }: { icon: React.ElementType; l
       className="card-hover flex items-center gap-3 pl-2 pr-4 py-2 rounded-full bg-[var(--surface)] border border-[var(--border)] shadow-[var(--sh-1)]"
       title={tip}
     >
-      <div className="grid place-items-center w-9 h-9 rounded-full bg-indigo-50 border border-indigo-100 shrink-0">
+      <div className="grid place-items-center w-9 h-9 rounded-full bg-indigo-50 dark:bg-indigo-400/10 border border-indigo-100 dark:border-indigo-400/20 shrink-0">
         <Icon className="w-4 h-4 text-indigo-500" />
       </div>
       <div className="min-w-0">
@@ -299,7 +299,7 @@ export default function DashboardPage() {
           <button
             onClick={() => downloadReport()}
             title="Open a printable diagnostic report (save as PDF)."
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-600 bg-indigo-400/10 hover:bg-indigo-400/20 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-600 dark:text-indigo-300 bg-indigo-400/10 hover:bg-indigo-400/20 transition-colors"
           >
             <FileDown className="w-3.5 h-3.5" /> Report
           </button>
@@ -312,7 +312,7 @@ export default function DashboardPage() {
           {fault && (
             <Card className="!p-3 flex items-center gap-2.5 border-rose-500/30 bg-rose-500/5" title="The fusion layer matched this failure signature.">
               <ShieldAlert className="w-4 h-4 text-rose-400" />
-              <span className="text-sm text-rose-700">
+              <span className="text-sm text-rose-700 dark:text-rose-300">
                 Identified fault: <b className="font-semibold">{fault}</b>
                 {faultConf ? <span className="text-rose-700/70"> · {Math.round(faultConf * 100)}% confidence</span> : null}
               </span>
@@ -321,7 +321,7 @@ export default function DashboardPage() {
           {drift && (
             <Card className="!p-3 flex items-center gap-2.5 border-amber-500/30 bg-amber-500/5" title="The normal operating range is slowly shifting over time.">
               <Radio className="w-4 h-4 text-amber-400" />
-              <span className="text-sm text-amber-700">Concept drift — operating range shifting</span>
+              <span className="text-sm text-amber-700 dark:text-amber-300">Concept drift — operating range shifting</span>
             </Card>
           )}
         </div>
@@ -588,7 +588,7 @@ export default function DashboardPage() {
                   <button
                     onClick={() => setAcked((s) => new Set(s).add(a.id))}
                     title="Acknowledge"
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-[var(--border)] text-[var(--text-dim)] hover:text-sky-700 hover:border-cyan-500/40"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-[var(--border)] text-[var(--text-dim)] hover:text-sky-700 dark:text-sky-300 hover:border-cyan-500/40"
                   >
                     <Check className="w-3 h-3" /> Ack
                   </button>
@@ -604,9 +604,9 @@ export default function DashboardPage() {
         <CardTitle icon={Activity} right={latest?.llm_source ? <Badge tone="indigo">{latest.llm_source}</Badge> : undefined}>
           AI Assistant — Plain-Language Alert
         </CardTitle>
-        <div className="rounded-xl bg-black/30 border border-[var(--border)] p-4 font-mono text-[13px] leading-relaxed min-h-[60px]">
+        <div className="rounded-xl bg-[var(--surface-3)] dark:bg-black/40 border border-[var(--border)] p-4 font-mono text-[13px] leading-relaxed min-h-[60px]">
           {latest ? (
-            <span className={latest.urgency > 0.6 ? "text-rose-700" : "text-emerald-700"}>
+            <span className={latest.urgency > 0.6 ? "text-rose-700 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300"}>
               <span className="text-[var(--text-muted)]">$ </span>{latest.alert}
             </span>
           ) : (

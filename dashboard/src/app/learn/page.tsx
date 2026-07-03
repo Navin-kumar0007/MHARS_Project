@@ -104,7 +104,7 @@ export default function LearnPage() {
               <div className="flex-1 min-w-[150px] rounded-xl border border-[var(--border)] bg-[var(--surface-3)] p-3.5">
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="metric text-indigo-400 text-xs">{String(i + 1).padStart(2, "0")}</span>
-                  <s.icon className="w-4 h-4 text-indigo-600" />
+                  <s.icon className="w-4 h-4 text-indigo-600 dark:text-indigo-300" />
                   <span className="text-[13px] font-medium text-[var(--text)]">{s.name}</span>
                 </div>
                 <p className="text-[11px] text-[var(--text-dim)] leading-snug">{s.desc}</p>
@@ -161,14 +161,14 @@ export default function LearnPage() {
           <CardTitle icon={Radio}>Demo vs Live</CardTitle>
           <div className="space-y-3">
             <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-3.5">
-              <div className="text-[12px] text-blue-700 font-medium mb-1">Demo · Simulation</div>
+              <div className="text-[12px] text-blue-700 dark:text-blue-300 font-medium mb-1">Demo · Simulation</div>
               <p className="text-xs text-[var(--text-dim)] leading-relaxed">
                 Runs a simulated thermal environment. Use the Test Panel to inject faults
                 (heat spike, bearing wear, fan blockage, sensor drift, power surge) and watch the AI react.
               </p>
             </div>
             <div className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3.5">
-              <div className="text-[12px] text-rose-700 font-medium mb-1">Live · Real Hardware</div>
+              <div className="text-[12px] text-rose-700 dark:text-rose-300 font-medium mb-1">Live · Real Hardware</div>
               <p className="text-xs text-[var(--text-dim)] leading-relaxed">
                 Reads your actual machine&apos;s CPU temperature / load via system sensors and runs the
                 same pipeline on real telemetry. Toggle from the sidebar (operator+).

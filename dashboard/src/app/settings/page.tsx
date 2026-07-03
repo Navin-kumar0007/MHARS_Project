@@ -59,7 +59,7 @@ export default function SettingsPage() {
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
       <PageHeader icon={SettingsIcon} title="Settings" subtitle="Machine profile, model status, sharing and access control" />
 
-      {msg && <div className="text-xs text-amber-700 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">{msg}</div>}
+      {msg && <div className="text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">{msg}</div>}
 
       <div className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 lg:col-span-6">
@@ -67,9 +67,9 @@ export default function SettingsPage() {
           {profile ? (
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div><span className="eyebrow block">Name</span><span className="text-[var(--text)]">{profile.name}</span></div>
-              <div><span className="eyebrow block">Idle</span><span className="text-emerald-700">{profile.idle}°C</span></div>
-              <div><span className="eyebrow block">Safe Max</span><span className="text-amber-700">{profile.safe_max}°C</span></div>
-              <div><span className="eyebrow block">Critical</span><span className="text-rose-700">{profile.critical}°C</span></div>
+              <div><span className="eyebrow block">Idle</span><span className="text-emerald-700 dark:text-emerald-300">{profile.idle}°C</span></div>
+              <div><span className="eyebrow block">Safe Max</span><span className="text-amber-700 dark:text-amber-300">{profile.safe_max}°C</span></div>
+              <div><span className="eyebrow block">Critical</span><span className="text-rose-700 dark:text-rose-300">{profile.critical}°C</span></div>
               <div><span className="eyebrow block">Heat Rate</span><span className="text-[var(--text)]">{profile.heat_rate}</span></div>
               <div><span className="eyebrow block">Mode</span><span className="text-[var(--text)]">{latest?.live_mode ? "Live" : "Demo"}</span></div>
             </div>
@@ -115,7 +115,7 @@ export default function SettingsPage() {
                 <label className="eyebrow block mb-1">Expires (hours)</label>
                 <input type="number" min={1} max={168} value={hours} onChange={(e) => setHours(Number(e.target.value))} className={`${inputCls} w-28`} />
               </div>
-              <button onClick={onCreateLink} className="flex items-center gap-1.5 bg-indigo-400/15 hover:bg-indigo-400/25 border border-indigo-400/40 text-indigo-700 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors">
+              <button onClick={onCreateLink} className="flex items-center gap-1.5 bg-indigo-400/15 hover:bg-indigo-400/25 border border-indigo-400/40 text-indigo-700 dark:text-indigo-300 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors">
                 <Plus className="w-4 h-4" /> Create Link
               </button>
             </div>
@@ -128,7 +128,7 @@ export default function SettingsPage() {
                     <p className="text-[10px] text-[var(--text-muted)]">expires {new Date(l.expires_at * 1000).toLocaleString()} · {l.access_count} views</p>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <button onClick={() => copy(l.token)} title="Copy URL" className="p-1.5 rounded-lg text-[var(--text-dim)] hover:text-indigo-600 hover:bg-indigo-400/10">
+                    <button onClick={() => copy(l.token)} title="Copy URL" className="p-1.5 rounded-lg text-[var(--text-dim)] hover:text-indigo-600 dark:text-indigo-300 hover:bg-indigo-400/10">
                       {copied === l.token ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                     </button>
                     <button onClick={async () => { await revokeShareLink(l.token); refreshLinks(); }} title="Revoke" className="p-1.5 rounded-lg text-[var(--text-dim)] hover:text-rose-400 hover:bg-rose-500/10">
@@ -162,7 +162,7 @@ export default function SettingsPage() {
                   <option value="admin">admin</option>
                 </select>
               </div>
-              <button onClick={onCreateUser} className="flex items-center gap-1.5 bg-indigo-400/15 hover:bg-indigo-400/25 border border-indigo-400/40 text-indigo-700 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors">
+              <button onClick={onCreateUser} className="flex items-center gap-1.5 bg-indigo-400/15 hover:bg-indigo-400/25 border border-indigo-400/40 text-indigo-700 dark:text-indigo-300 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors">
                 <Plus className="w-4 h-4" /> Add User
               </button>
             </div>

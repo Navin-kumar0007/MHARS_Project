@@ -8,44 +8,50 @@ export function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(" ");
 }
 
-// ── Shared chart theme (tuned for LIGHT background) ──────────────────────────
+// Alpha-blend any color (hex OR css var()) with transparent — safe for tokens.
+export function mix(color: string, pct: number) {
+  return `color-mix(in srgb, ${color} ${pct}%, transparent)`;
+}
+
+// ── Shared chart theme — CSS-var driven so SVG recolors live on theme toggle ──
 export const CHART = {
-  grid: "rgba(16,24,40,0.07)",
-  axis: "#9aa0ad",
+  grid: "var(--chart-grid)",
+  axis: "var(--chart-axis)",
   tickFont: 10,
-  temp: "#ef4444",
-  forecast: "#0ea5e9",
-  good: "#10b981",
-  warn: "#f59e0b",
-  bad: "#ef4444",
-  crit: "#dc2626",
-  accent: "#5e6ad2",
-  teal: "#5e6ad2",   // alias kept for back-compat; now indigo
-  cyan: "#0ea5e9",
-  indigo: "#5e6ad2",
-  amber: "#f59e0b",
-  fuchsia: "#d946ef",
-  combined: "#475569",
+  temp: "var(--chart-temp)",
+  forecast: "var(--chart-forecast)",
+  good: "var(--chart-good)",
+  warn: "var(--chart-warn)",
+  bad: "var(--chart-bad)",
+  crit: "var(--chart-crit)",
+  accent: "var(--chart-accent)",
+  teal: "var(--chart-accent)",   // alias kept for back-compat
+  cyan: "var(--chart-cyan)",
+  indigo: "var(--chart-indigo)",
+  amber: "var(--chart-amber)",
+  fuchsia: "var(--chart-fuchsia)",
+  combined: "var(--chart-combined)",
+  radialTrack: "var(--chart-radial-track)",
 };
 
 export const tooltipStyle = {
-  backgroundColor: "#ffffff",
-  border: "1px solid #e7e9ee",
+  backgroundColor: "var(--chart-tooltip-bg)",
+  border: "1px solid var(--chart-tooltip-border)",
   borderRadius: 12,
   fontSize: 12,
-  color: "#0c0e14",
-  boxShadow: "0 8px 28px -8px rgba(16,24,40,0.22)",
+  color: "var(--text)",
+  boxShadow: "var(--chart-tooltip-shadow)",
   padding: "8px 12px",
 } as const;
 
-export const tooltipLabelStyle = { color: "#8b91a1", fontSize: 11, marginBottom: 2 } as const;
+export const tooltipLabelStyle = { color: "var(--text-muted)", fontSize: 11, marginBottom: 2 } as const;
 
 // ── Health helpers (single source of truth across the app) ───────────────────
 export function healthColor(score: number | null | undefined): string {
-  if (score == null) return "#8b91a1";
-  if (score >= 75) return "#10b981";
-  if (score >= 45) return "#f59e0b";
-  return "#ef4444";
+  if (score == null) return "var(--text-muted)";
+  if (score >= 75) return "var(--good)";
+  if (score >= 45) return "var(--warn)";
+  return "var(--bad)";
 }
 export function healthLabel(score: number | null | undefined): string {
   if (score == null) return "—";
@@ -73,7 +79,7 @@ export function PageHeader({
       <div className="flex items-center gap-3">
         <div
           className="grid place-items-center w-11 h-11 rounded-2xl shrink-0"
-          style={{ background: `${accent}14`, border: `1px solid ${accent}33`, boxShadow: `0 6px 16px -8px ${accent}66` }}
+          style={{ background: mix(accent, 12), border: `1px solid ${mix(accent, 30)}`, boxShadow: `0 6px 16px -8px ${mix(accent, 55)}` }}
         >
           <Icon className="w-5 h-5" style={{ color: accent }} />
         </div>
@@ -133,12 +139,12 @@ export function CardTitle({
 
 // ── Badge ──────────────────────────────────────────────────────────────────
 const TONES: Record<string, string> = {
-  good: "text-emerald-700 border-emerald-200 bg-emerald-50",
-  warn: "text-amber-700 border-amber-200 bg-amber-50",
-  bad: "text-rose-700 border-rose-200 bg-rose-50",
-  info: "text-sky-700 border-sky-200 bg-sky-50",
-  indigo: "text-indigo-700 border-indigo-200 bg-indigo-50",
-  neutral: "text-slate-600 border-slate-200 bg-slate-50",
+  good: "text-emerald-700 border-emerald-200 bg-emerald-50 dark:text-emerald-300 dark:border-emerald-400/25 dark:bg-emerald-400/10",
+  warn: "text-amber-700 border-amber-200 bg-amber-50 dark:text-amber-300 dark:border-amber-400/25 dark:bg-amber-400/10",
+  bad: "text-rose-700 border-rose-200 bg-rose-50 dark:text-rose-300 dark:border-rose-400/25 dark:bg-rose-400/10",
+  info: "text-sky-700 border-sky-200 bg-sky-50 dark:text-sky-300 dark:border-sky-400/25 dark:bg-sky-400/10",
+  indigo: "text-indigo-700 border-indigo-200 bg-indigo-50 dark:text-indigo-300 dark:border-indigo-400/25 dark:bg-indigo-400/10",
+  neutral: "text-slate-600 border-slate-200 bg-slate-50 dark:text-slate-300 dark:border-slate-500/25 dark:bg-slate-400/10",
 };
 export function Badge({
   tone = "neutral",
@@ -161,7 +167,7 @@ export function StatCard({
   value,
   unit,
   sub,
-  color = "#0c0e14",
+  color = "var(--text)",
   spark,
   title,
 }: {
@@ -176,18 +182,20 @@ export function StatCard({
 }) {
   return (
     <Card hover className="group relative flex flex-col gap-3 overflow-hidden" title={title}>
-      <span className="absolute left-0 top-5 bottom-5 w-[3px] rounded-full" style={{ background: color }} />
+      {/* soft corner glow tinted to the metric color */}
+      <span className="absolute -top-10 -right-10 w-32 h-32 rounded-full blur-2xl opacity-0 group-hover:opacity-30 transition-opacity duration-500" style={{ background: color }} />
+      <span className="absolute left-0 top-5 bottom-5 w-[3px] rounded-full" style={{ background: color, boxShadow: `0 0 12px -1px ${mix(color, 70)}` }} />
       <div className="flex items-center justify-between pl-1.5">
         <span className="eyebrow">{label}</span>
         <span
-          className="grid place-items-center w-9 h-9 rounded-xl shrink-0 transition-transform group-hover:scale-110"
-          style={{ background: `${color}16`, border: `1px solid ${color}2e` }}
+          className="grid place-items-center w-9 h-9 rounded-xl shrink-0 transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-3"
+          style={{ background: mix(color, 12), border: `1px solid ${mix(color, 24)}`, boxShadow: `0 6px 18px -8px ${mix(color, 80)}` }}
         >
           <Icon className="w-4 h-4" style={{ color }} />
         </span>
       </div>
       <div className="flex items-end gap-1.5 pl-1.5">
-        <span className="metric text-[34px] leading-none tracking-tight" style={{ color }}>
+        <span className="metric text-[34px] leading-none tracking-tight" style={{ color, filter: `drop-shadow(0 2px 10px ${mix(color, 28)})` }}>
           {value}
         </span>
         {unit && <span className="text-sm text-[var(--text-muted)] mb-1 font-medium">{unit}</span>}
@@ -223,7 +231,7 @@ export function RadialGauge({
       <ResponsiveContainer width="100%" height="100%">
         <RadialBarChart innerRadius="74%" outerRadius="100%" data={data} startAngle={90} endAngle={-270} barSize={12}>
           <PolarAngleAxis type="number" domain={[0, 100]} angleAxisId={0} tick={false} />
-          <RadialBar background={{ fill: "#eef0f4" }} dataKey="value" cornerRadius={12} isAnimationActive={false} />
+          <RadialBar background={{ fill: "var(--chart-radial-track)" }} dataKey="value" cornerRadius={12} isAnimationActive={false} />
         </RadialBarChart>
       </ResponsiveContainer>
       <div className="absolute inset-0 grid place-items-center text-center">
@@ -237,7 +245,7 @@ export function RadialGauge({
 }
 
 // ── Sparkline ────────────────────────────────────────────────────────────────
-export function Sparkline({ data, color = "#5e6ad2" }: { data: number[]; color?: string }) {
+export function Sparkline({ data, color = "var(--accent)" }: { data: number[]; color?: string }) {
   const d = data.map((v, i) => ({ i, v }));
   const id = React.useId().replace(/:/g, "");
   return (
@@ -264,7 +272,7 @@ export function Sparkline({ data, color = "#5e6ad2" }: { data: number[]; color?:
 }
 
 // ── Progress bar ─────────────────────────────────────────────────────────────
-export function Progress({ value, color = "#5e6ad2", track = "#eef0f4" }: { value: number; color?: string; track?: string }) {
+export function Progress({ value, color = "var(--accent)", track = "var(--surface-3)" }: { value: number; color?: string; track?: string }) {
   return (
     <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ background: track }}>
       <div
@@ -279,7 +287,7 @@ export function Progress({ value, color = "#5e6ad2", track = "#eef0f4" }: { valu
 export function Awaiting({ label = "Waiting for telemetry…" }: { label?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 py-16 text-[var(--text-muted)]">
-      <span className="w-2 h-2 rounded-full pulse-dot" style={{ background: "#5e6ad2", color: "#5e6ad2" }} />
+      <span className="w-2 h-2 rounded-full pulse-dot" style={{ background: "var(--accent)", color: "var(--accent)" }} />
       <span className="text-sm">{label}</span>
     </div>
   );
