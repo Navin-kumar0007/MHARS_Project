@@ -777,13 +777,19 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
     try:
         while True:
             # ── Step 1: Get temperature ────────────────────────────────────
+            cpu_pct_real = None  # host CPU load this tick (set in live mode, shared with vitals)
             if state.live_mode:
                 # LIVE MODE — real-data path (Apple Silicon exposes no CPU temp
                 # sensor, so temperature is a TRANSPARENT thermal model of the
                 # machine's REAL CPU load). Inputs (load/RAM/etc) are real psutil.
                 if PSUTIL_AVAILABLE:
-                    cpu_pct = psutil.cpu_percent(interval=0) / 100.0
+                    # Single authoritative reading per tick (real blocking window,
+                    # not the interval=0 delta which returned 0.0 on first use and
+                    # disagreed with the vitals panel). Shared with system_health.
+                    cpu_pct_real = psutil.cpu_percent(interval=0.1)
+                    cpu_pct = cpu_pct_real / 100.0
                 else:
+                    cpu_pct_real = 50.0
                     cpu_pct = 0.5
                 # Thermal model: idle ~42°C → full-load ~88°C, driven by real load.
                 target_temp = 42.0 + cpu_pct * 46.0
@@ -815,7 +821,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
             # ── Step 2: Run the complete MHARS AI pipeline ─────────────────
             # Run in threadpool to prevent blocking the WebSocket event loop during heavy ML inferences
             # Pass synthetic mode flag to core via metadata if needed, but here we just use the global flag
-            result = await run_in_threadpool(state.mhars.run, temp_celsius=sr, sync_alert=True)
+            result = await run_in_threadpool(state.mhars.run, temp_celsius=sr, sync_alert=True, live_mode=state.live_mode)
 
             # ── Step 3: Apply PPO action feedback to the simulation ────────
             # Fix #7: Aligned with Config.ACTIONS (removed phantom "increase-fan")
@@ -875,7 +881,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(default=""
                 "live_mode": state.live_mode,
                 
                 # Full system health (dynamic for all modes)
-                "system_health": SystemHealthMonitor.snapshot(state.machine_type_id),
+                "system_health": SystemHealthMonitor.snapshot(state.machine_type_id, cpu_pct=cpu_pct_real),
 
                 # Machine thresholds (for gauge rendering)
                 "thresholds": {

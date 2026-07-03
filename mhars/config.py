@@ -95,6 +95,26 @@ class Config:
     # provides a distribution-free residual anomaly score (fixes Live-mode OOD).
     FORECASTER_BACKEND      = os.environ.get("MHARS_FORECASTER", "lstm").strip().lower()
     FOUNDATION_MODEL        = os.environ.get("MHARS_FOUNDATION_MODEL", "amazon/chronos-bolt-tiny")
+    # Efficiency: the foundation forecast (Chronos on CPU) is the per-tick latency
+    # hotspot. Recompute the multi-horizon trajectory every N ticks and reuse it in
+    # between; the cheap distribution-free residual anomaly is still scored EVERY
+    # tick against the most recent band (no loss of detection latency).
+    FORECAST_STRIDE         = int(os.environ.get("MHARS_FORECAST_STRIDE", "5"))
+
+    # ── Risk-aware control (replaces the fixed conformal urgency bump) ─────────
+    # Urgency gains a term proportional to how far the forecast's upper bound
+    # exceeds safe_max, scaled by proximity to critical — principled, bounded.
+    RISK_URGENCY_MAX        = 0.30  # max additive urgency from forecast risk
+    CONFORMAL_URGENCY_BOOST = 0.15  # legacy fallback (kept for back-compat)
+
+    # ── Data-quality gate (sensor-health preprocessing) ───────────────────────
+    # Cheap guards run before the models so a stuck / dead / wildly out-of-range
+    # sensor lowers trust instead of silently producing confident garbage.
+    DQ_FLATLINE_WINDOW      = 15     # ticks inspected for a stuck sensor
+    DQ_FLATLINE_STD         = 1e-3   # normalized std below this → flatline
+    DQ_SPIKE_DT             = 40.0   # |ΔT| °C/tick above this → implausible spike
+    DQ_TEMP_MIN             = -40.0  # absolute plausible temperature floor (°C)
+    DQ_TEMP_MAX             = 200.0  # absolute plausible temperature ceiling (°C)
 
     # ── PPO training ──────────────────────────────────────────────────────────
     PPO_TIMESTEPS    = 500_000

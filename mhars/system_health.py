@@ -27,19 +27,26 @@ class SystemHealthMonitor:
             return 42.0
 
     @staticmethod
-    def _snapshot_mac_cpu() -> dict:
-        """Returns real host Mac metrics (Machine 0)"""
-        cpu_pct = 0.0
+    def _snapshot_mac_cpu(cpu_pct: float = None) -> dict:
+        """Returns real host Mac metrics (Machine 0).
+
+        cpu_pct: if the caller already sampled CPU load this tick, pass it so the
+        vitals match the value driving the thermal model (one source of truth).
+        Otherwise sample here with a real (blocking) measurement window.
+        """
         cpu_cores = os.cpu_count() or 4
-        if PSUTIL_AVAILABLE:
-            cpu_pct = psutil.cpu_percent(interval=0.1)
-        else:
-            try:
-                load_1min = os.getloadavg()[0]
-                cpu_pct = min(100.0, (load_1min / cpu_cores) * 100)
-            except:
-                pass
-                
+        if cpu_pct is None:
+            cpu_pct = 0.0
+            if PSUTIL_AVAILABLE:
+                cpu_pct = psutil.cpu_percent(interval=0.1)
+            else:
+                try:
+                    load_1min = os.getloadavg()[0]
+                    cpu_pct = min(100.0, (load_1min / cpu_cores) * 100)
+                except Exception:
+                    pass
+        cpu_pct = round(float(cpu_pct), 1)
+
         cpu_status = "critical" if cpu_pct > 90 else "warning" if cpu_pct > 75 else "healthy"
         cpu_verdict = "Critical load" if cpu_status == "critical" else "High load" if cpu_status == "warning" else "Normal load"
 
@@ -185,10 +192,14 @@ class SystemHealthMonitor:
         }
 
     @staticmethod
-    def snapshot(machine_id: int) -> dict:
-        """Returns dynamic snapshot based on machine ID."""
+    def snapshot(machine_id: int, cpu_pct: float = None) -> dict:
+        """Returns dynamic snapshot based on machine ID.
+
+        cpu_pct: optional pre-sampled host CPU load (Machine 0) so the vitals
+        share one source of truth with the thermal model.
+        """
         if machine_id == 0:
-            return SystemHealthMonitor._snapshot_mac_cpu()
+            return SystemHealthMonitor._snapshot_mac_cpu(cpu_pct)
         elif machine_id == 1:
             return SystemHealthMonitor._snapshot_motor()
         elif machine_id == 2:

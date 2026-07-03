@@ -91,7 +91,7 @@ export default function DiagnosticsPage() {
 
   return (
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
-      <PageHeader icon={Activity} title="Diagnostics" subtitle="Model provenance, live performance and detection metrics" accent="#818cf8">
+      <PageHeader icon={Activity} title="Diagnostics" subtitle="Model provenance, live performance and detection metrics" accent="#5e6ad2">
         <Badge tone={degraded.length === 0 ? "good" : "warn"}>
           {degraded.length === 0 ? "All models live" : `${degraded.length} in fallback`}
         </Badge>
@@ -105,7 +105,7 @@ export default function DiagnosticsPage() {
             <button
               onClick={runDiagnose}
               disabled={diagBusy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-200 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-indigo-400/30 text-indigo-700 dark:text-indigo-300 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50 transition-colors"
             >
               <Stethoscope className="w-3.5 h-3.5" /> {diagBusy ? "Diagnosing…" : "Run diagnosis"}
             </button>
@@ -114,23 +114,23 @@ export default function DiagnosticsPage() {
           AI Diagnostician — RAG + Digital-Twin Agent
         </CardTitle>
         {!diag ? (
-          <p className="text-sm text-slate-500">
-            Runs an agent that retrieves maintenance manuals, simulates each action on the digital twin, and reasons about root cause — grounded, with citations. Click <span className="text-indigo-300">Run diagnosis</span>.
+          <p className="text-sm text-[var(--text-dim)]">
+            Runs an agent that retrieves maintenance manuals, simulates each action on the digital twin, and reasons about root cause — grounded, with citations. Click <span className="text-indigo-600 dark:text-indigo-300">Run diagnosis</span>.
           </p>
         ) : (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={diag.severity === "critical" ? "bad" : diag.severity === "warning" ? "warn" : "good"}>{diag.severity}</Badge>
-              <span className="text-sm text-slate-200"><b className="font-semibold">Root cause:</b> {diag.root_cause}</span>
+              <span className="text-sm text-[var(--text)]"><b className="font-semibold">Root cause:</b> {diag.root_cause}</span>
               {diag.llm_grounded && <Badge tone="indigo">LLM-grounded</Badge>}
             </div>
-            <p className="text-[13px] text-slate-300 leading-relaxed bg-white/[0.02] border border-white/[0.06] rounded-xl p-3">{diag.narrative}</p>
+            <p className="text-[13px] text-[var(--text)] leading-relaxed bg-[var(--surface-3)] border border-[var(--border)] rounded-xl p-3">{diag.narrative}</p>
             {diag.counterfactual && (
               <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
-                <FlaskConical className="w-4 h-4 text-amber-300 mt-0.5 shrink-0" />
+                <FlaskConical className="w-4 h-4 text-amber-700 dark:text-amber-300 mt-0.5 shrink-0" />
                 <div>
-                  <div className="eyebrow text-amber-300/80">Counterfactual — what the action changes</div>
-                  <p className="text-[13px] text-slate-300 mt-0.5">{diag.counterfactual.text}</p>
+                  <div className="eyebrow text-amber-700/80">Counterfactual — what the action changes</div>
+                  <p className="text-[13px] text-[var(--text)] mt-0.5">{diag.counterfactual.text}</p>
                 </div>
               </div>
             )}
@@ -138,17 +138,17 @@ export default function DiagnosticsPage() {
               <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/[0.04] p-3">
                 <div className="eyebrow mb-2 flex items-center gap-1.5"><Radar className="w-3.5 h-3.5" /> Causal counterfactual RCA (do-operator on the twin)</div>
                 <div className="flex items-center gap-2 mb-2 text-xs">
-                  <span className="text-slate-400">root cause:</span>
+                  <span className="text-[var(--text-dim)]">root cause:</span>
                   <Badge tone="indigo">{diag.causal_rca.root_cause_variable.replace(/_/g, " ")}</Badge>
-                  <span className="text-slate-400">prescribed:</span>
+                  <span className="text-[var(--text-dim)]">prescribed:</span>
                   <Badge tone="good">{diag.causal_rca.prescribed_action}</Badge>
                 </div>
                 <div className="space-y-1.5">
                   {Object.entries(diag.causal_rca.causal_contributions).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
                     <div key={k} className="flex items-center gap-3">
-                      <span className="text-[11px] text-slate-400 w-32 capitalize">{k.replace(/_/g, " ")}</span>
+                      <span className="text-[11px] text-[var(--text-dim)] w-32 capitalize">{k.replace(/_/g, " ")}</span>
                       <div className="flex-1"><Progress value={v} color={v >= 50 ? CHART.indigo : "#475569"} /></div>
-                      <span className="metric text-[11px] w-9 text-right text-slate-300">{v}%</span>
+                      <span className="metric text-[11px] w-9 text-right text-[var(--text)]">{v}%</span>
                     </div>
                   ))}
                 </div>
@@ -162,8 +162,8 @@ export default function DiagnosticsPage() {
                   {diag.what_if.map((w) => {
                     const rec = diag.recommended_action?.action === w.action;
                     return (
-                      <div key={w.action} className={`flex items-center justify-between rounded-lg border px-3 py-1.5 ${rec ? "border-emerald-500/40 bg-emerald-500/5" : "border-white/[0.05] bg-white/[0.02]"}`}>
-                        <span className="text-xs text-slate-300 capitalize flex items-center gap-2">{w.action}{rec && <Badge tone="good">recommended</Badge>}</span>
+                      <div key={w.action} className={`flex items-center justify-between rounded-lg border px-3 py-1.5 ${rec ? "border-emerald-500/40 bg-emerald-500/5" : "border-[var(--border)] bg-[var(--surface-3)]"}`}>
+                        <span className="text-xs text-[var(--text)] capitalize flex items-center gap-2">{w.action}{rec && <Badge tone="good">recommended</Badge>}</span>
                         <span className="metric text-xs" style={{ color: w.breach ? CHART.bad : w.safe ? CHART.good : CHART.warn }}>{w.final_c}°C{w.breach ? " ⚠" : ""}</span>
                       </div>
                     );
@@ -175,15 +175,15 @@ export default function DiagnosticsPage() {
                 <div className="eyebrow mb-2 flex items-center gap-1.5"><BookText className="w-3.5 h-3.5" /> Cited maintenance references</div>
                 <div className="space-y-1.5">
                   {diag.citations.map((c) => (
-                    <div key={c.id} className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-1.5">
-                      <div className="flex items-center gap-2"><span className="metric text-[10px] text-indigo-300">{c.id}</span><span className="text-xs text-slate-300">{c.title}</span></div>
+                    <div key={c.id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-1.5">
+                      <div className="flex items-center gap-2"><span className="metric text-[10px] text-indigo-600 dark:text-indigo-300">{c.id}</span><span className="text-xs text-[var(--text)]">{c.title}</span></div>
                     </div>
                   ))}
                 </div>
                 <div className="eyebrow mt-3 mb-1">Agent tool trace</div>
                 <div className="flex flex-wrap gap-1.5">
                   {diag.trace.map((t, i) => (
-                    <span key={i} className="text-[10px] px-2 py-0.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-slate-400">{t.tool}: {t.step}</span>
+                    <span key={i} className="text-[10px] px-2 py-0.5 rounded-md border border-[var(--border)] bg-[var(--surface-3)] text-[var(--text-dim)]">{t.tool}: {t.step}</span>
                   ))}
                 </div>
               </div>
@@ -197,12 +197,12 @@ export default function DiagnosticsPage() {
         <Card hover title={shield?.reason || "Worst-case forecast checked against the digital twin each tick."}>
           <div className="eyebrow">Safety Shield</div>
           <div className="metric text-2xl mt-1" style={{ color: shield?.active ? CHART.bad : CHART.good }}>{shield?.active ? "Engaged" : "Standby"}</div>
-          <div className="text-[11px] text-slate-500 mt-0.5">{shield?.active ? `→ ${shield.shielded}` : `worst-case ${shield?.worst_case_c ?? "--"}°C`}</div>
+          <div className="text-[11px] text-[var(--text-dim)] mt-0.5">{shield?.active ? `→ ${shield.shielded}` : `worst-case ${shield?.worst_case_c ?? "--"}°C`}</div>
         </Card>
-        <Card hover><div className="eyebrow">Inference Latency (avg)</div><div className="metric text-2xl mt-1 text-teal-300">{latency.avg}</div><div className="text-[11px] text-slate-500 mt-0.5">min {latency.min} · max {latency.max}</div></Card>
-        <Card hover><div className="eyebrow">Telemetry</div><div className="metric text-2xl mt-1" style={{ color: isConnected ? CHART.good : CHART.bad }}>{isConnected ? "Live" : "Down"}</div><div className="text-[11px] text-slate-500 mt-0.5">{history.length} samples buffered</div></Card>
-        <Card hover><div className="eyebrow">Detector P(fault)</div><div className="metric text-2xl mt-1" style={{ color: detP != null && detP > 0.5 ? CHART.bad : CHART.good }}>{detP != null ? `${(detP * 100).toFixed(0)}%` : "--"}</div><div className="text-[11px] text-slate-500 mt-0.5">supervised classifier</div></Card>
-        <Card hover><div className="eyebrow">Active Machine</div><div className="metric text-2xl mt-1 text-slate-100">{latest?.machine_type || "—"}</div><div className="text-[11px] text-slate-500 mt-0.5">{latest?.live_mode ? "live hardware" : "simulation"}</div></Card>
+        <Card hover><div className="eyebrow">Inference Latency (avg)</div><div className="metric text-2xl mt-1 text-indigo-600 dark:text-indigo-300">{latency.avg}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">min {latency.min} · max {latency.max}</div></Card>
+        <Card hover><div className="eyebrow">Telemetry</div><div className="metric text-2xl mt-1" style={{ color: isConnected ? CHART.good : CHART.bad }}>{isConnected ? "Live" : "Down"}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">{history.length} samples buffered</div></Card>
+        <Card hover><div className="eyebrow">Detector P(fault)</div><div className="metric text-2xl mt-1" style={{ color: detP != null && detP > 0.5 ? CHART.bad : CHART.good }}>{detP != null ? `${(detP * 100).toFixed(0)}%` : "--"}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">supervised classifier</div></Card>
+        <Card hover><div className="eyebrow">Active Machine</div><div className="metric text-2xl mt-1 text-[var(--text)]">{latest?.machine_type || "—"}</div><div className="text-[11px] text-[var(--text-dim)] mt-0.5">{latest?.live_mode ? "live hardware" : "simulation"}</div></Card>
       </div>
 
       {/* Model provenance */}
@@ -211,13 +211,13 @@ export default function DiagnosticsPage() {
         {Object.keys(ms).length === 0 ? <Awaiting label="Loading model status…" /> : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {Object.entries(ms).map(([name, v]) => (
-              <div key={name} className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-2.5">
+              <div key={name} className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3.5 py-2.5">
                 <div className="flex items-center gap-2.5">
                   <ShieldCheck className="w-4 h-4" style={{ color: v.ok ? CHART.good : CHART.warn }} />
-                  <span className="text-sm text-slate-200">{name}</span>
+                  <span className="text-sm text-[var(--text)]">{name}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-slate-500">{v.detail}</span>
+                  <span className="text-[11px] text-[var(--text-dim)]">{v.detail}</span>
                   <Badge tone={v.ok ? "good" : "warn"}>{v.ok ? "live" : "fallback"}</Badge>
                 </div>
               </div>
@@ -236,23 +236,23 @@ export default function DiagnosticsPage() {
             <div className="space-y-3">
               <div className="flex items-end gap-2">
                 <span className="metric text-3xl" style={{ color: drift.drifting ? CHART.warn : CHART.good }}>{drift.drift_score.toFixed(2)}</span>
-                <span className="text-[11px] text-slate-500 mb-1">drift score · threshold {drift.threshold}</span>
+                <span className="text-[11px] text-[var(--text-dim)] mb-1">drift score · threshold {drift.threshold}</span>
               </div>
               <Progress value={Math.min(100, (drift.drift_score / (drift.threshold * 2)) * 100)} color={drift.drifting ? CHART.warn : CHART.good} />
-              <p className="text-[11px] text-slate-500">
+              <p className="text-[11px] text-[var(--text-dim)]">
                 {!drift.reference_ready ? "Building reference distribution from normal operation…"
                   : drift.retrain_recommended ? "Sustained distribution shift — retraining recommended."
                   : drift.drifting ? "Distribution shifting — watching." : "Normal operating distribution stable."}
               </p>
               {/* R4 — label-free lifelong adaptation */}
-              <div className="pt-2 mt-1 border-t border-white/[0.06] flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-[11px] text-slate-500">
-                  Adaptations: <span className="text-slate-300">{adapt?.count ?? 0}</span> · normal buffer {adapt?.normal_buffer ?? 0}
+              <div className="pt-2 mt-1 border-t border-[var(--border)] flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[11px] text-[var(--text-dim)]">
+                  Adaptations: <span className="text-[var(--text)]">{adapt?.count ?? 0}</span> · normal buffer {adapt?.normal_buffer ?? 0}
                 </span>
                 <button
                   onClick={adaptNow}
                   disabled={adaptBusy}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-teal-400/30 text-teal-200 bg-teal-400/10 hover:bg-teal-400/20 disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold border border-indigo-400/30 text-indigo-700 dark:text-indigo-300 bg-indigo-400/10 hover:bg-indigo-400/20 disabled:opacity-50"
                 >
                   {adaptBusy ? "Adapting…" : "Adapt now (label-free)"}
                 </button>
@@ -267,10 +267,10 @@ export default function DiagnosticsPage() {
           {registry.length === 0 ? <Awaiting label="Loading registry…" /> : (
             <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-1">
               {registry.map((r) => (
-                <div key={r.file} className="flex items-center justify-between rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-1.5">
+                <div key={r.file} className="flex items-center justify-between rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-1.5">
                   <div className="min-w-0">
-                    <div className="text-xs text-slate-200">{r.name}</div>
-                    <div className="metric text-[10px] text-slate-500 truncate">{r.present ? `${r.sha} · ${r.size_kb} KB` : "missing"}</div>
+                    <div className="text-xs text-[var(--text)]">{r.name}</div>
+                    <div className="metric text-[10px] text-[var(--text-dim)] truncate">{r.present ? `${r.sha} · ${r.size_kb} KB` : "missing"}</div>
                   </div>
                   <Badge tone={r.present ? "good" : "bad"}>{r.present ? "present" : "absent"}</Badge>
                 </div>
@@ -283,11 +283,11 @@ export default function DiagnosticsPage() {
       {/* Eval metrics */}
       <div className="grid grid-cols-12 gap-4">
         <Card className="col-span-12 lg:col-span-7">
-          <CardTitle icon={Gauge} right={evalRep ? <span className="text-[11px] text-slate-500">{evalRep.samples} samples · {evalRep.positives} faults</span> : undefined}>
+          <CardTitle icon={Gauge} right={evalRep ? <span className="text-[11px] text-[var(--text-dim)]">{evalRep.samples} samples · {evalRep.positives} faults</span> : undefined}>
             Anomaly Detection — Offline Eval
           </CardTitle>
           {evalAvail === false && (
-            <p className="text-sm text-slate-500">No eval report yet. Run <span className="metric text-slate-300">python3 tools/eval_anomaly.py</span> to generate one.</p>
+            <p className="text-sm text-[var(--text-dim)]">No eval report yet. Run <span className="metric text-[var(--text)]">python3 tools/eval_anomaly.py</span> to generate one.</p>
           )}
           {evalRep && (
             <div className="space-y-2">
@@ -297,15 +297,15 @@ export default function DiagnosticsPage() {
               {Object.entries(evalRep.detectors).map(([name, d]) => {
                 const strong = d.roc_auc >= 0.8;
                 return (
-                  <div key={name} className="grid grid-cols-[1.6fr_repeat(3,1fr)] gap-2 items-center rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-1.5">
-                    <span className="text-xs text-slate-300">{name}</span>
-                    <span className="metric text-xs text-right text-slate-400">{d.f1.toFixed(2)}</span>
-                    <span className="metric text-xs text-right text-slate-400">{d.best_f1.toFixed(2)}</span>
+                  <div key={name} className="grid grid-cols-[1.6fr_repeat(3,1fr)] gap-2 items-center rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-1.5">
+                    <span className="text-xs text-[var(--text)]">{name}</span>
+                    <span className="metric text-xs text-right text-[var(--text-dim)]">{d.f1.toFixed(2)}</span>
+                    <span className="metric text-xs text-right text-[var(--text-dim)]">{d.best_f1.toFixed(2)}</span>
                     <span className="metric text-xs text-right font-semibold" style={{ color: strong ? CHART.good : CHART.warn }}>{d.roc_auc.toFixed(2)}</span>
                   </div>
                 );
               })}
-              <p className="text-[11px] text-slate-500 pt-1">Higher ROC-AUC = better separation. The supervised classifier P(fault) is the adopted detector.</p>
+              <p className="text-[11px] text-[var(--text-dim)] pt-1">Higher ROC-AUC = better separation. The supervised classifier P(fault) is the adopted detector.</p>
             </div>
           )}
           {evalAvail === null && <Awaiting label="Loading eval report…" />}
@@ -317,14 +317,14 @@ export default function DiagnosticsPage() {
             <div className="space-y-2.5">
               {Object.entries(evalRep.per_fault).map(([f, d]) => (
                 <div key={f} className="flex items-center gap-3">
-                  <span className="text-xs text-slate-300 w-32 capitalize">{f.replace(/_/g, " ")}</span>
+                  <span className="text-xs text-[var(--text)] w-32 capitalize">{f.replace(/_/g, " ")}</span>
                   <div className="flex-1"><Progress value={d.detected * 100} color={d.detected >= 0.7 ? CHART.good : CHART.warn} /></div>
-                  <span className="metric text-xs w-10 text-right text-slate-300">{(d.detected * 100).toFixed(0)}%</span>
+                  <span className="metric text-xs w-10 text-right text-[var(--text)]">{(d.detected * 100).toFixed(0)}%</span>
                 </div>
               ))}
             </div>
           ) : (
-            evalAvail === false ? <p className="text-sm text-slate-500">—</p> : <Awaiting label="…" />
+            evalAvail === false ? <p className="text-sm text-[var(--text-dim)]">—</p> : <Awaiting label="…" />
           )}
         </Card>
       </div>

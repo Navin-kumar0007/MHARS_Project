@@ -143,6 +143,15 @@ class MHARS:
         from mhars.drift_monitor import DriftMonitor
         self._drift_monitor = DriftMonitor()
 
+        # Sensor-health / data-quality gate (runs before the models).
+        from mhars.data_quality import DataQualityMonitor
+        self._dq_monitor = DataQualityMonitor()
+
+        # Efficiency: foundation-forecast cache (recompute every FORECAST_STRIDE ticks).
+        self._fc_tick = 0
+        self._fc_cache = None            # last {p10,p50,p90} arrays
+        self._model_hashes: Dict[str, str] = {}   # serving-model provenance (sha256)
+
         # R5 — uncertainty-aware safety shield state
         self._fc_upper_margin = 0.0
         self._shield_status = None
@@ -187,7 +196,34 @@ class MHARS:
 
         print(f"[MHARS] Initialising for machine: {self.machine_name}")
         self._load_models(llm_path)
+        self._record_model_hashes()
         print(f"[MHARS] Ready ✓\n")
+
+    def _record_model_hashes(self):
+        """Provenance: sha256 (first 12 hex) of every serving model file that
+        exists, so each decision can be traced to exact model bytes. Cheap,
+        computed once at load — pinned into metadata + registry heartbeat."""
+        import hashlib
+        targets = {
+            "isolation_forest": Config.ISOLATION_FOREST,
+            "lstm_v2": getattr(Config, "LSTM_V2", None),
+            "autoencoder_v2": getattr(Config, "AUTOENCODER_V2", None),
+            "vibration": getattr(Config, "VIBRATION_DETECTOR", None),
+            "fault_classifier": getattr(Config, "FAULT_CLASSIFIER", None),
+            "ppo": (Config.PPO if os.path.exists(Config.PPO) else Config.PPO.replace(".zip", "") + ".zip"),
+            "learned_fusion": getattr(Config, "LEARNED_FUSION_MODEL", None),
+            "rul_v2": getattr(Config, "RUL_MODEL_V2", None),
+        }
+        for name, path in targets.items():
+            try:
+                if path and os.path.exists(path):
+                    h = hashlib.sha256()
+                    with open(path, "rb") as f:
+                        for chunk in iter(lambda: f.read(1 << 20), b""):
+                            h.update(chunk)
+                    self._model_hashes[name] = h.hexdigest()[:12]
+            except Exception:
+                pass
 
     def _setup_logger(self):
         import logging.handlers
@@ -248,13 +284,20 @@ class MHARS:
         # Pass logger to MetadataManager for structured stale-model events
         metadata = MetadataManager(max_age_days=30, logger=self.logger)
 
-        # Isolation Forest
+        # Isolation Forest — tolerate scikit-learn version drift: an incompatible
+        # pickle must not crash startup. On failure we fall back to the cold-start
+        # linear proxy and let online retraining rebuild a serving-distribution IF.
         self._if_model = None
         if os.path.exists(Config.ISOLATION_FOREST):
-            with open(Config.ISOLATION_FOREST, 'rb') as f:
-                self._if_model = pickle.load(f)
-            metadata.check_model_freshness(Config.ISOLATION_FOREST, "Isolation Forest")
-            print(f"  ✓  Isolation Forest loaded")
+            try:
+                with open(Config.ISOLATION_FOREST, 'rb') as f:
+                    self._if_model = pickle.load(f)
+                metadata.check_model_freshness(Config.ISOLATION_FOREST, "Isolation Forest")
+                print(f"  ✓  Isolation Forest loaded")
+            except Exception as e:
+                self._if_model = None
+                print(f"  ⚠  Isolation Forest incompatible ({type(e).__name__}) — "
+                      f"using cold-start proxy until online retrain")
         else:
             print(f"  ⚠  Isolation Forest not found — skipping noise filter")
 
@@ -518,7 +561,8 @@ class MHARS:
     def run(self, temp_celsius: Union[float, 'SensorReading'] = None,
             extra_scores: Optional[Dict] = None,
             sync_alert: bool = False,
-            reading: Optional['SensorReading'] = None) -> MHARSResult:
+            reading: Optional['SensorReading'] = None,
+            live_mode: bool = False) -> MHARSResult:
         """
         Run the full MHARS pipeline on a sensor reading.
 
@@ -549,6 +593,15 @@ class MHARS:
             sr.dT_dt = sr.temp_c - prev.temp_c  # °C/sec at 1Hz
         elif sr.dT_dt is None:
             sr.dT_dt = 0.0
+
+        # Step 0 — Sensor-health / data-quality gate (before any model runs).
+        # A corrupt/dead/out-of-range sensor lowers trust rather than producing a
+        # confident-but-wrong score. Corrupt readings are replaced by the last
+        # good value so NaN never reaches torch; the flags feed confidence + LLM.
+        dq = self._dq_monitor.check(sr.temp_c, sr.dT_dt)
+        if not dq["ok"] and dq["quality"] == 0.0:
+            sr.temp_c = float(dq["usable_temp"])   # hold-last-good on corrupt data
+            sr.dT_dt = 0.0                          # rate is meaningless on a bad reading
         self._reading_history.append(sr)
 
         temp_celsius_val = sr.temp_c
@@ -707,6 +760,9 @@ class MHARS:
         self._recent_contexts.append(context)
         urgency_confidence = 1.0 - float(np.std(list(self._recent_urgencies))) if len(self._recent_urgencies) >= 3 else 0.5
         urgency_variance   = float(np.std(list(self._recent_urgencies))) if len(self._recent_urgencies) >= 3 else 0.0
+        # Degrade confidence by measured data quality — a bad sensor means the
+        # scores above are less trustworthy (never suppresses the safety layer).
+        urgency_confidence = round(float(urgency_confidence * dq["quality"]), 3)
         self._steps_since_action = (
             0 if action != "do-nothing" else self._steps_since_action + 1
         )
@@ -725,15 +781,19 @@ class MHARS:
 
         # Trend Analysis
         trend_stats = self._trend_analyzer.update(temp_norm)
-        drift_detected = trend_stats["is_drifting"]
-        
+        # In LIVE mode the models run on out-of-distribution host telemetry, so a
+        # permanent baseline mismatch reads as "drift". That is expected, not a
+        # fault — do not treat it as concept drift (no banner, no health penalty).
+        drift_detected = trend_stats["is_drifting"] and not live_mode
+
         # Health Score & Maintenance Schedule
         health_data = self._health_engine.compute(
             current_temp=temp_celsius_val,
             anomaly_score=ae_score,
             rul_minutes=rul_minutes,
             vib_score=vib_score,
-            drift_detected=drift_detected
+            drift_detected=drift_detected,
+            live_mode=live_mode,
         )
         
         maintenance_plan = self._maintenance_scheduler.schedule(rul_minutes, health_data["score"])
@@ -786,6 +846,10 @@ class MHARS:
                 "features": sr.to_feature_vector(),
                 "urgency_confidence": round(urgency_confidence, 3),
                 "urgency_variance": round(urgency_variance, 4),
+                # Sensor-health / data-quality gate (score + flags for this tick).
+                "data_quality": dq,
+                # Provenance: sha256 (12 hex) of each serving model file.
+                "model_provenance": self._model_hashes,
                 # Phase 1 — Conformal prediction interval
                 "prediction_interval": prediction_interval,
                 "conformal_boost": round(conformal_boost, 4),
@@ -826,6 +890,7 @@ class MHARS:
             "load_pct":         sr.load_pct,
             "dT_dt":            sr.dT_dt,
             "causal_reasoning": causal_reasoning,
+            "data_quality":     dq["note"],
         }
         
         if route == "edge":
@@ -978,11 +1043,18 @@ class MHARS:
                 H = Config.LSTM_FORECAST_HORIZON
                 temps = [r.temp_c for r in self._reading_history][-33:]
                 actual = float(temps[-1])
-                # Residual anomaly: score the actual reading vs the PREVIOUS band.
+                # Residual anomaly: score the actual reading vs the PREVIOUS band —
+                # runs EVERY tick (cheap, no detection-latency loss). Class ref
+                # avoids a hot-loop re-import.
                 if self._prev_fc_band is not None:
-                    from stage2_ml.foundation_forecaster import FoundationForecaster
-                    self._foundation_anomaly = FoundationForecaster.residual_anomaly(actual, *self._prev_fc_band)
-                fc = self._foundation.forecast(temps, horizon=H)
+                    self._foundation_anomaly = type(self._foundation).residual_anomaly(actual, *self._prev_fc_band)
+                # Efficiency: the Chronos forecast is the per-tick hotspot. Recompute
+                # only every FORECAST_STRIDE ticks; reuse the cached trajectory in
+                # between (temps move <1°C/s, so the band stays valid over ~5 ticks).
+                self._fc_tick += 1
+                if self._fc_cache is None or self._fc_tick % Config.FORECAST_STRIDE == 0:
+                    self._fc_cache = self._foundation.forecast(temps, horizon=H)
+                fc = self._fc_cache
                 p10, p50, p90 = fc["p10"], fc["p50"], fc["p90"]
                 self._lstm_horizon = H
                 self._lstm_qmode = False
@@ -998,7 +1070,7 @@ class MHARS:
                 }
                 self._prev_fc_band = (float(p10[0]), float(p50[0]), float(p90[0]))
                 lstm_score = float(np.clip(abs(pred_norm - temp_norm), 0, 1))
-                conformal_boost = Config.CONFORMAL_URGENCY_BOOST if prediction_interval["upper"] > self.profile["safe_max"] else 0.0
+                conformal_boost = self._risk_urgency(prediction_interval)
                 return pred_norm, lstm_score, prediction_interval, conformal_boost
             except Exception:
                 pass  # fall through to the trained LSTM on any error
@@ -1094,13 +1166,27 @@ class MHARS:
 
         lstm_score = float(np.clip(abs(pred_norm - temp_norm), 0, 1))
 
-        # Urgency boost if conformal upper bound exceeds safe_max
-        conformal_boost = 0.0
-        if prediction_interval is not None:
-            if prediction_interval["upper"] > self.profile["safe_max"]:
-                conformal_boost = Config.CONFORMAL_URGENCY_BOOST
+        # Risk-aware urgency term from the forecast's upper bound (replaces the
+        # old fixed bump — now proportional to how far worst-case exceeds safe_max).
+        conformal_boost = self._risk_urgency(prediction_interval)
 
         return pred_norm, lstm_score, prediction_interval, conformal_boost
+
+    def _risk_urgency(self, prediction_interval) -> float:
+        """Principled uncertainty→control coupling. Additive urgency proportional
+        to how far the forecast's upper quantile (p90) breaches safe_max, scaled
+        by the safe→critical span and capped at RISK_URGENCY_MAX. 0 when the whole
+        predicted band stays within the safe envelope."""
+        if not prediction_interval:
+            return 0.0
+        upper = float(prediction_interval.get("upper", 0.0))
+        safe_max = float(self.profile["safe_max"])
+        critical = float(self.profile["critical"])
+        if upper <= safe_max:
+            return 0.0
+        span = max(critical - safe_max, 1e-6)
+        frac = float(np.clip((upper - safe_max) / span, 0.0, 1.0))
+        return round(frac * Config.RISK_URGENCY_MAX, 4)
 
     def _compute_ae_score(self) -> float:
         # Phase 2: Per-machine damping replaces blanket CPU/Server bypass.
@@ -1272,6 +1358,25 @@ class MHARS:
         self._shield_status = {"active": False, "original": proposed_action,
                                "shielded": proposed_action, "reason": None,
                                "worst_case_c": round(current_temp_raw, 1)}
+
+        # Twin-INDEPENDENT hard bound (defence-in-depth): a first-order energy
+        # argument that does not rely on the learned/physics twin's fidelity.
+        # worst_temp = current + forecast p90 uncertainty margin. If that alone
+        # already reaches critical the machine must stop, whatever any model says;
+        # if it reaches safe_max under a passive action, force at least a throttle.
+        # This bounds the safety guarantee independently of twin error.
+        margin = max(0.0, getattr(self, "_fc_upper_margin", 0.0))
+        worst_now = current_temp_raw + margin
+        self._shield_status["worst_case_c"] = round(worst_now, 1)
+        if worst_now >= p["critical"]:
+            self._shield_status.update({"active": True, "shielded": "emergency-shutdown",
+                                        "reason": "hard bound: worst-case reading ≥ critical"})
+            return "emergency-shutdown"
+        if worst_now >= p["safe_max"] and proposed_action not in ["fan+", "throttle", "shutdown", "emergency-shutdown"]:
+            self._shield_status.update({"active": True, "shielded": "throttle",
+                                        "reason": "hard bound: worst-case reading ≥ safe limit"})
+            proposed_action = "throttle"
+
         if hasattr(self, '_digital_twin') and self._digital_twin is not None and sr is not None:
             margin = max(0.0, getattr(self, "_fc_upper_margin", 0.0))   # forecast uncertainty (°C)
             worst_temp = current_temp_raw + margin
@@ -1332,14 +1437,23 @@ class MHARS:
         denom = sum((x - mean_x) ** 2 for x in xs) or 1e-6
         slope = sum((xs[i] - mean_x) * (temps[i] - mean_y) for i in range(n)) / denom  # °C/sec
 
-        # Require a genuine, sustained climb (> ~1.2°C/min) before reporting a
-        # time-to-limit; otherwise the machine is effectively stable.
-        if slope <= 0.02:
-            return None
-
         remaining_degrees = safe_max - current_temp
         if remaining_degrees <= 0:
             return 0.0  # already past threshold
+
+        # Require a genuine, sustained climb (> ~3°C/min) before reporting a
+        # time-to-limit; otherwise the machine is effectively stable. (Raised
+        # from 0.02 — that was low enough that idle CPU-load ripple in live mode
+        # produced a spurious "minutes to limit" while temperature was flat.)
+        if slope <= 0.05:
+            return None
+
+        # Headroom guard: far below the safe limit, a weak drift is not a failure
+        # trajectory. Only project a time-to-limit when either the machine is
+        # within 10°C of the limit OR it is genuinely climbing fast (>0.15°C/s ≈
+        # 9°C/min). A 0.04°C/s ripple at 48°C (limit 85°C) → "Stable", not 14m.
+        if remaining_degrees > 10.0 and slope < 0.15:
+            return None
 
         minutes = (remaining_degrees / slope) / 60.0
         return round(min(minutes, 999.0), 1)

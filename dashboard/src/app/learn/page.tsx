@@ -62,10 +62,10 @@ const GLOSSARY = [
 ];
 
 const COLORS = [
-  { c: "#34d399", name: "Green", mean: "Safe / healthy / no action needed." },
-  { c: "#fbbf24", name: "Amber", mean: "Caution — approaching a limit." },
-  { c: "#f87171", name: "Red", mean: "Critical — over the limit or fault." },
-  { c: "#22d3ee", name: "Cyan", mean: "AI forecast / active signal / highlight." },
+  { c: "#10b981", name: "Green", mean: "Safe / healthy / no action needed." },
+  { c: "#f59e0b", name: "Amber", mean: "Caution — approaching a limit." },
+  { c: "#ef4444", name: "Red", mean: "Critical — over the limit or fault." },
+  { c: "#0ea5e9", name: "Cyan", mean: "AI forecast / active signal / highlight." },
 ];
 
 const ANALYTICS = [
@@ -85,11 +85,11 @@ const ROLES = [
 export default function LearnPage() {
   return (
     <div className="p-6 space-y-5 max-w-[1600px] mx-auto fade-in">
-      <PageHeader icon={BookOpen} title="How It Works" subtitle="A guided tour of the MHARS pipeline and every panel" accent="#818cf8" />
+      <PageHeader icon={BookOpen} title="How It Works" subtitle="A guided tour of the MHARS pipeline and every panel" accent="#5e6ad2" />
 
       <Card accent>
         <CardTitle icon={Activity}>What is MHARS</CardTitle>
-        <p className="text-[14px] text-slate-300 leading-relaxed">
+        <p className="text-[14px] text-[var(--text)] leading-relaxed">
           MHARS (Multi-modal Hybrid Adaptive Response System) is a digital twin for thermal-critical machines.
           It fuses six AI models to detect anomalies, forecast failures, decide a protective action, and explain
           itself — all in real time. Below is the exact path a single sensor reading takes every second.
@@ -101,16 +101,16 @@ export default function LearnPage() {
         <div className="flex flex-wrap items-stretch gap-2">
           {STAGES.map((s, i) => (
             <React.Fragment key={s.name}>
-              <div className="flex-1 min-w-[150px] rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
+              <div className="flex-1 min-w-[150px] rounded-xl border border-[var(--border)] bg-[var(--surface-3)] p-3.5">
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="metric text-indigo-400 text-xs">{String(i + 1).padStart(2, "0")}</span>
-                  <s.icon className="w-4 h-4 text-indigo-300" />
-                  <span className="text-[13px] font-medium text-slate-100">{s.name}</span>
+                  <s.icon className="w-4 h-4 text-indigo-600 dark:text-indigo-300" />
+                  <span className="text-[13px] font-medium text-[var(--text)]">{s.name}</span>
                 </div>
-                <p className="text-[11px] text-slate-500 leading-snug">{s.desc}</p>
+                <p className="text-[11px] text-[var(--text-dim)] leading-snug">{s.desc}</p>
               </div>
               {i < STAGES.length - 1 && (
-                <div className="hidden xl:flex items-center"><ArrowRight className="w-4 h-4 text-slate-700" /></div>
+                <div className="hidden xl:flex items-center"><ArrowRight className="w-4 h-4 text-[var(--text-muted)]" /></div>
               )}
             </React.Fragment>
           ))}
@@ -121,10 +121,10 @@ export default function LearnPage() {
         <CardTitle icon={Brain}>The Six Models</CardTitle>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {MODELS.map((m) => (
-            <div key={m.tag} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+            <div key={m.tag} className="rounded-xl border border-[var(--border)] bg-[var(--surface-3)] p-4">
               <div className="eyebrow text-cyan-400/90">{m.tag}</div>
-              <div className="text-sm text-slate-100 font-medium mt-0.5 mb-1.5">{m.name}</div>
-              <p className="text-xs text-slate-400 leading-relaxed">{m.what}</p>
+              <div className="text-sm text-[var(--text)] font-medium mt-0.5 mb-1.5">{m.name}</div>
+              <p className="text-xs text-[var(--text-dim)] leading-relaxed">{m.what}</p>
             </div>
           ))}
         </div>
@@ -135,9 +135,9 @@ export default function LearnPage() {
           <CardTitle icon={Gauge}>Reading the Overview</CardTitle>
           <div className="space-y-2">
             {PANELS.map((p) => (
-              <div key={p.name} className="flex gap-3 border-b border-white/[0.05] pb-2 last:border-0">
-                <div className="text-[12px] text-cyan-300/90 w-40 shrink-0">{p.name}</div>
-                <div className="text-xs text-slate-400 leading-snug">{p.reads}</div>
+              <div key={p.name} className="flex gap-3 border-b border-[var(--border)] pb-2 last:border-0">
+                <div className="text-[12px] text-sky-700/90 w-40 shrink-0">{p.name}</div>
+                <div className="text-xs text-[var(--text-dim)] leading-snug">{p.reads}</div>
               </div>
             ))}
           </div>
@@ -147,9 +147,9 @@ export default function LearnPage() {
           <CardTitle icon={Layers}>Reading the Analytics Page</CardTitle>
           <div className="space-y-2">
             {ANALYTICS.map((p) => (
-              <div key={p.name} className="flex gap-3 border-b border-white/[0.05] pb-2 last:border-0">
-                <div className="text-[12px] text-cyan-300/90 w-32 shrink-0">{p.name}</div>
-                <div className="text-xs text-slate-400 leading-snug">{p.reads}</div>
+              <div key={p.name} className="flex gap-3 border-b border-[var(--border)] pb-2 last:border-0">
+                <div className="text-[12px] text-sky-700/90 w-32 shrink-0">{p.name}</div>
+                <div className="text-xs text-[var(--text-dim)] leading-snug">{p.reads}</div>
               </div>
             ))}
           </div>
@@ -161,15 +161,15 @@ export default function LearnPage() {
           <CardTitle icon={Radio}>Demo vs Live</CardTitle>
           <div className="space-y-3">
             <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-3.5">
-              <div className="text-[12px] text-blue-300 font-medium mb-1">Demo · Simulation</div>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <div className="text-[12px] text-blue-700 dark:text-blue-300 font-medium mb-1">Demo · Simulation</div>
+              <p className="text-xs text-[var(--text-dim)] leading-relaxed">
                 Runs a simulated thermal environment. Use the Test Panel to inject faults
                 (heat spike, bearing wear, fan blockage, sensor drift, power surge) and watch the AI react.
               </p>
             </div>
             <div className="rounded-xl border border-rose-500/25 bg-rose-500/5 p-3.5">
-              <div className="text-[12px] text-rose-300 font-medium mb-1">Live · Real Hardware</div>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <div className="text-[12px] text-rose-700 dark:text-rose-300 font-medium mb-1">Live · Real Hardware</div>
+              <p className="text-xs text-[var(--text-dim)] leading-relaxed">
                 Reads your actual machine&apos;s CPU temperature / load via system sensors and runs the
                 same pipeline on real telemetry. Toggle from the sidebar (operator+).
               </p>
@@ -181,13 +181,13 @@ export default function LearnPage() {
           <CardTitle icon={ShieldAlert}>Access Roles · RBAC</CardTitle>
           <div className="space-y-2">
             {ROLES.map((r) => (
-              <div key={r.role} className="flex items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+              <div key={r.role} className="flex items-start gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-3)] p-3">
                 <Badge tone={r.tone}>{r.role}</Badge>
-                <span className="text-xs text-slate-400 leading-snug flex-1">{r.can}</span>
+                <span className="text-xs text-[var(--text-dim)] leading-snug flex-1">{r.can}</span>
               </div>
             ))}
           </div>
-          <p className="text-[11px] text-slate-600 mt-3">Demo logins: admin/admin123 · operator/oper123 · viewer/view123</p>
+          <p className="text-[11px] text-[var(--text-muted)] mt-3">Demo logins: admin/admin123 · operator/oper123 · viewer/view123</p>
         </Card>
       </div>
 
@@ -196,9 +196,9 @@ export default function LearnPage() {
           <CardTitle icon={BookOpen}>Glossary · Plain English</CardTitle>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
             {GLOSSARY.map((g) => (
-              <div key={g.term} className="flex gap-2 border-b border-white/[0.05] pb-2">
-                <span className="text-[12px] text-cyan-300/90 w-32 shrink-0">{g.term}</span>
-                <span className="text-xs text-slate-400 leading-snug">{g.plain}</span>
+              <div key={g.term} className="flex gap-2 border-b border-[var(--border)] pb-2">
+                <span className="text-[12px] text-sky-700/90 w-32 shrink-0">{g.term}</span>
+                <span className="text-xs text-[var(--text-dim)] leading-snug">{g.plain}</span>
               </div>
             ))}
           </div>
@@ -210,8 +210,8 @@ export default function LearnPage() {
             {COLORS.map((c) => (
               <div key={c.name} className="flex items-center gap-3">
                 <span className="inline-block w-4 h-4 rounded shrink-0" style={{ background: c.c }} />
-                <span className="text-[12px] text-slate-200 w-14">{c.name}</span>
-                <span className="text-xs text-slate-400 leading-snug flex-1">{c.mean}</span>
+                <span className="text-[12px] text-[var(--text)] w-14">{c.name}</span>
+                <span className="text-xs text-[var(--text-dim)] leading-snug flex-1">{c.mean}</span>
               </div>
             ))}
           </div>
@@ -219,8 +219,8 @@ export default function LearnPage() {
       </div>
 
       <Card>
-        <div className="flex items-center gap-2 text-[12px] text-slate-500">
-          <Wifi className="w-3.5 h-3.5 text-teal-400" />
+        <div className="flex items-center gap-2 text-[12px] text-[var(--text-dim)]">
+          <Wifi className="w-3.5 h-3.5 text-indigo-400" />
           Telemetry streams over WebSocket at 1 Hz. Every number you see is a live model output — nothing is mocked.
         </div>
       </Card>
